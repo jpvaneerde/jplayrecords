@@ -1,0 +1,327 @@
+/* JPlay Records — same family as JPlay and JPlaying Now: deep night background, emerald accent,
+   heavy system type, soft translucent cards. Touch-first: big targets, no hover-only controls. */
+
+:root,
+body.dark {
+  --bg: #0f111a;
+  --bg-2: #161926;
+  --card: rgba(255, 255, 255, 0.05);
+  --card-hover: rgba(255, 255, 255, 0.08);
+  --line: rgba(255, 255, 255, 0.09);
+  --text: #ffffff;
+  --muted: #9aa1b2;
+  --accent: #10b981;
+  --accent-2: #34d399;
+  --accent-deep: #047857;
+  --accent-ink: #052e22;
+  --blue: #3b82f6;
+  --gold: #f5b83d;
+  --danger: #f87171;
+  --vinyl: #0a0c12;
+  --vinyl-groove: rgba(255, 255, 255, 0.045);
+  --label-ink: #062e22;
+  --shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+  --overlay: rgba(8, 9, 14, 0.82);
+  color-scheme: dark;
+}
+
+body.light {
+  --bg: #f3f4f6;
+  --bg-2: #ffffff;
+  --card: #ffffff;
+  --card-hover: #f9fafb;
+  --line: #e5e7eb;
+  --text: #111827;
+  --muted: #6b7280;
+  --accent: #059669;
+  --accent-2: #10b981;
+  --accent-deep: #047857;
+  --accent-ink: #ffffff;
+  --blue: #2563eb;
+  --gold: #d97706;
+  --danger: #dc2626;
+  --vinyl: #15171f;
+  --vinyl-groove: rgba(255, 255, 255, 0.05);
+  --label-ink: #062e22;
+  --shadow: 0 10px 25px rgba(17, 24, 39, 0.1);
+  --overlay: rgba(243, 244, 246, 0.9);
+  color-scheme: light;
+}
+
+body.retro {
+  --bg: #1c1917;
+  --bg-2: #292524;
+  --card: rgba(245, 158, 11, 0.06);
+  --card-hover: rgba(245, 158, 11, 0.1);
+  --line: rgba(245, 158, 11, 0.16);
+  --text: #fbbf24;
+  --muted: #b08a4a;
+  --accent: #f59e0b;
+  --accent-2: #fbbf24;
+  --accent-deep: #b45309;
+  --accent-ink: #1c1917;
+  --blue: #f97316;
+  --gold: #fde68a;
+  --danger: #fb7185;
+  --vinyl: #0c0a09;
+  --vinyl-groove: rgba(251, 191, 36, 0.05);
+  --label-ink: #431407;
+  --shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+  --overlay: rgba(20, 17, 15, 0.86);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+/* Kiosk: no text selection, no long-press menus, no cursor. */
+body.kiosk {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: none;
+}
+body.kiosk * {
+  cursor: none !important;
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+a {
+  color: var(--accent-2);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 0;
+  background: none;
+  touch-action: manipulation;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  min-height: 48px;
+  padding: 0.6em 1.1em;
+  border-radius: 12px;
+  font-weight: 700;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s, transform 0.08s;
+}
+.btn:not(:disabled):active {
+  transform: scale(0.97);
+  background: var(--card-hover);
+}
+@media (hover: hover) {
+  .btn:not(:disabled):hover {
+    background: var(--card-hover);
+  }
+  .btn.primary:not(:disabled):hover {
+    background: var(--accent-2);
+  }
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.btn.danger {
+  color: var(--danger);
+}
+.btn.big {
+  font-size: 1.15rem;
+  padding: 0.8em 1.5em;
+  border-radius: 14px;
+}
+.btn.small {
+  min-height: 36px;
+  padding: 0.35em 0.75em;
+  font-size: 0.85rem;
+  border-radius: 9px;
+}
+.btn.icon {
+  padding: 0;
+  width: 52px;
+  height: 52px;
+  font-size: 1.3rem;
+}
+
+/* ---------- chips ---------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  min-height: 44px;
+  padding: 0.35em 1em;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.chip.on {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+.chip .n {
+  font-weight: 600;
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
+/* ---------- cards ---------- */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+/* ---------- forms ---------- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.field > span {
+  font-size: 0.875rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+input:not([type='checkbox']):not([type='radio']):not([type='range']),
+select,
+textarea {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.65em 0.85em;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+input[type='checkbox'],
+input[type='radio'],
+input[type='range'] {
+  accent-color: var(--accent);
+}
+.check {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+.check input {
+  width: 1.2em;
+  height: 1.2em;
+}
+
+/* ---------- messages ---------- */
+.notice {
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+.notice.error {
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.notice.ok {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* A cover that hasn't loaded (or has none): a little record. */
+.nocover {
+  background:
+    radial-gradient(circle at 50% 50%, var(--accent) 0 12%, transparent 12.5%),
+    repeating-radial-gradient(circle at 50% 50%, transparent 0 3px, var(--vinyl-groove) 3px 4px),
+    radial-gradient(circle at 50% 50%, #1d2130 0 30%, var(--vinyl) 31% 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,40 @@
+# JPlay Records kiosk: Chromium full screen under cage (a Wayland kiosk compositor) on tty1.
+# Installed by setup.sh. The URL comes from /etc/default/jplayrecords-kiosk.
+[Unit]
+Description=JPlay Records kiosk (cage + Chromium)
+After=systemd-user-sessions.service network-online.target plymouth-quit-wait.service
+Wants=network-online.target
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+User=kiosk
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+Environment=XDG_SESSION_TYPE=wayland
+EnvironmentFile=/etc/default/jplayrecords-kiosk
+# Wait until the server answers, so the first screen isn't an error page.
+ExecStartPre=/bin/sh -c 'for i in $$(seq 1 60); do curl -fsS -o /dev/null "${HEALTH_URL}" && exit 0; sleep 2; done; exit 0'
+ExecStart=/usr/bin/cage -d -- /usr/bin/chromium \
+  --kiosk --app=${KIOSK_URL} \
+  --ozone-platform=wayland \
+  --user-data-dir=/home/kiosk/.config/jplayrecords-chromium \
+  --password-store=basic \
+  --no-first-run --noerrdialogs --disable-infobars --disable-session-crashed-bubble \
+  --disable-pinch --overscroll-history-navigation=0 \
+  --disable-features=Translate,TouchpadOverscrollHistoryNavigation,MediaRouter \
+  --check-for-update-interval=31536000 \
+  --autoplay-policy=no-user-gesture-required
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target
