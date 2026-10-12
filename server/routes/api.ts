@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { access, newDevice, requireAdmin, requireViewer, type Env } from '../auth.ts';
 import { DISCOGS_TOKEN, JPLAY_API, JPLAY_LOGIN_URL, PUBLIC_URL, SYNC_TIME, TZ } from '../config.ts';
-import { all, get, getSetting, run, setSetting, type ItemRow } from '../db.ts';
+import { all, get, getSetting, run, setSetting, YEAR, type ItemRow } from '../db.ts';
 import { coverFiles, customFields, fetchRelease, releaseDetails, startSync, syncStatus } from '../discogs.ts';
 import {
   compartmentMembers,
@@ -47,7 +47,8 @@ function listItem(r: ItemRow) {
     releaseId: r.release_id,
     artist: r.artist,
     title: r.title,
-    year: r.year,
+    year: r.orig_year ?? r.year, // original release year when Discogs knows it
+    pressingYear: r.year,
     format: formatLabel(r.format === 'Vinyl' && r.size ? `Vinyl ${r.size}` : r.format),
     cover: coverFiles(r.cover).small,
   };
@@ -86,9 +87,9 @@ function filters(qp: (k: string) => string | undefined) {
     params.push(genre, genre);
   }
   const decade = qp('decade');
-  if (decade === 'unknown') where.push('year IS NULL');
+  if (decade === 'unknown') where.push(`${YEAR} IS NULL`);
   else if (decade && /^\d{4}$/.test(decade)) {
-    where.push('year BETWEEN ? AND ?');
+    where.push(`${YEAR} BETWEEN ? AND ?`);
     params.push(Number(decade), Number(decade) + 9);
   }
   const artist = qp('artist');
@@ -115,9 +116,9 @@ function orderBy(sort: string | undefined, q: string | undefined) {
     case 'added':
       return 'ORDER BY date_added DESC';
     case 'year':
-      return 'ORDER BY year IS NULL, year, discogs_rank';
+      return `ORDER BY ${YEAR} IS NULL, ${YEAR}, discogs_rank`;
     case 'year-desc':
-      return 'ORDER BY year IS NULL, year DESC, discogs_rank';
+      return `ORDER BY ${YEAR} IS NULL, ${YEAR} DESC, discogs_rank`;
     case 'title':
       return 'ORDER BY title COLLATE NOCASE';
     default:
@@ -180,7 +181,7 @@ records.get('/facets', (c) => {
     `SELECT value AS key, COUNT(*) AS n FROM items, json_each(items.styles) GROUP BY value HAVING n >= 3 ORDER BY n DESC LIMIT 40`,
   );
   const decades = all<{ key: string; n: number }>(
-    `SELECT CASE WHEN year IS NULL THEN 'unknown' ELSE CAST(year / 10 * 10 AS TEXT) END AS key, COUNT(*) AS n FROM items GROUP BY key ORDER BY key`,
+    `SELECT CASE WHEN ${YEAR} IS NULL THEN 'unknown' ELSE CAST(${YEAR} / 10 * 10 AS TEXT) END AS key, COUNT(*) AS n FROM items GROUP BY key ORDER BY key`,
   );
   const letters = all<{ key: string; n: number }>(`SELECT ${INITIAL} AS key, COUNT(*) AS n FROM items GROUP BY key ORDER BY key`);
   const total = get<{ n: number }>('SELECT COUNT(*) AS n FROM items')!.n;

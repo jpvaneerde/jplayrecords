@@ -51,6 +51,13 @@ db.exec(`
     tokenize = 'unicode61 remove_diacritics 2'
   );
 
+  -- Discogs "master" (all versions of an album): holds the original release year.
+  CREATE TABLE IF NOT EXISTS masters (
+    master_id  INTEGER PRIMARY KEY,
+    year       INTEGER,
+    fetched_at INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -65,6 +72,17 @@ db.exec(`
     last_seen_at INTEGER
   );
 `);
+
+// Small additive migrations for databases created by earlier versions.
+const itemCols = (db.prepare('PRAGMA table_info(items)').all() as { name: string }[]).map((c) => c.name);
+if (!itemCols.includes('master_id')) db.exec('ALTER TABLE items ADD COLUMN master_id INTEGER');
+if (!itemCols.includes('orig_year')) {
+  // Original release year (from the master); year = this pressing.
+  db.exec('ALTER TABLE items ADD COLUMN orig_year INTEGER');
+}
+
+/** The year we show and filter on: the original release year when known, else this pressing's year. */
+export const YEAR = 'COALESCE(orig_year, year)';
 
 export function now() {
   return Date.now();
@@ -118,6 +136,8 @@ export interface ItemRow {
   artist: string;
   title: string;
   year: number | null;
+  master_id: number | null;
+  orig_year: number | null;
   format: string;
   size: string;
   discs: number;
@@ -157,6 +177,7 @@ export function indexItem(id: number) {
     ...JSON.parse(it.genres),
     ...JSON.parse(it.styles),
     it.year ? String(it.year) : '',
+    it.orig_year && it.orig_year !== it.year ? String(it.orig_year) : '',
     fields,
     barcodes,
   ].join(' ');

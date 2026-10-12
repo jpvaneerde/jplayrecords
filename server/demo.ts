@@ -71,6 +71,8 @@ tx(() => {
       rank,
       t,
     );
+    // A third are reissues: the pressing is newer than the original.
+    if (rnd() < 0.33) run('UPDATE items SET orig_year = year, year = ? WHERE instance_id = ?', Math.min(2025, it.year + 5 + Math.floor(rnd() * 30)), id);
     covers.push({ id, hue: Math.floor(rnd() * 360), text: it.artist });
     indexItem(id);
   });

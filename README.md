@@ -17,10 +17,12 @@ Data lives in `$DATA_DIR/records.db` (SQLite), and covers live in `$DATA_DIR/cov
   1. reads the whole collection ("All" folder) through the Discogs API with your personal access token, **sorted by
      artist**, the same order you see in Discogs;
   2. downloads each cover once and keeps it next to a small WebP copy for the grid;
-  3. fetches tracklists slowly, so you can search track titles too.
+  3. looks up the **original release year** of every album through its Discogs *master*. The grid, decade filter
+     and year sort use that year. The record page also shows the year of your pressing when it differs;
+  4. fetches tracklists slowly, so you can search track titles too.
 
-  Discogs allows 60 requests per minute. A first sync of 1,000 records takes about 20 minutes, mostly for
-  tracklists. After that, only new records are fetched.
+  Discogs allows 60 requests per minute. A first sync of 1,000 records takes about 35 minutes, mostly for
+  original years and tracklists. After that, only new records are fetched.
 - **Search** uses SQLite FTS5 over artist, title, label and catalogue number, format, genres and styles, year,
   your custom Discogs fields and the tracks. Every word matches the start of a word, and accents are ignored
   ("bjork" finds Björk).

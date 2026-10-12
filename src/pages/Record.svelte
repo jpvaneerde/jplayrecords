@@ -140,6 +140,7 @@
         <h1>{it.title}</h1>
         <p class="facts">
           {[it.year, data?.details?.country, it.formatText].filter(Boolean).join(' · ')}
+          {#if it.pressingYear && it.pressingYear !== it.year}<span class="muted"> · this pressing {it.pressingYear}</span>{/if}
         </p>
         {#if it.labels}<p class="muted label">{it.labels}</p>{/if}
 

@@ -46,7 +46,9 @@ export interface ListItem {
   releaseId: number;
   artist: string;
   title: string;
+  /** Original release year (Discogs master), else this pressing's year. */
   year: number | null;
+  pressingYear: number | null;
   format: string;
   cover: string | null;
 }

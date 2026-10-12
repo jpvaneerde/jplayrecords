@@ -57,6 +57,7 @@ interface DCollectionItem {
   notes?: { field_id: number; value: string }[];
   basic_information: {
     id: number;
+    master_id?: number;
     title: string;
     year: number;
     cover_image?: string;
@@ -275,10 +276,11 @@ async function runSync(reason: string) {
     const changedCovers: Pick<ItemRow, 'instance_id' | 'release_id' | 'cover_url'>[] = [];
     tx(() => {
       const upsert = `INSERT INTO items (instance_id, release_id, folder_id, artist, title, year, format, size, discs, format_text, labels,
-          genres, styles, fields, rating, date_added, cover_url, discogs_rank, synced_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          genres, styles, fields, rating, date_added, cover_url, discogs_rank, synced_at, master_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(instance_id) DO UPDATE SET release_id = excluded.release_id, folder_id = excluded.folder_id,
-          artist = excluded.artist, title = excluded.title, year = excluded.year, format = excluded.format, size = excluded.size,
+          artist = excluded.artist, title = excluded.title, year = excluded.year, master_id = excluded.master_id,
+          format = excluded.format, size = excluded.size,
           discs = excluded.discs, format_text = excluded.format_text, labels = excluded.labels, genres = excluded.genres,
           styles = excluded.styles, fields = excluded.fields, rating = excluded.rating, date_added = excluded.date_added,
           cover_url = excluded.cover_url, discogs_rank = excluded.discogs_rank, synced_at = excluded.synced_at`;
@@ -310,6 +312,7 @@ async function runSync(reason: string) {
           cover,
           rank,
           t,
+          b.master_id || null,
         );
         const coverMissing = !old?.cover || !existsSync(join(COVER_DIR, `${old.cover}.jpg`));
         if (cover && (coverMissing || old?.cover_url !== cover)) changedCovers.push({ instance_id: it.instance_id, release_id: b.id, cover_url: cover });
@@ -318,6 +321,7 @@ async function runSync(reason: string) {
       // Sold or removed in Discogs: gone here too.
       run('DELETE FROM items WHERE synced_at <> ?', t);
       run('DELETE FROM search WHERE rowid NOT IN (SELECT instance_id FROM items)');
+      applyOriginalYears();
       for (const it of seen) indexItem(it.instance_id);
     });
     invalidateShelves();
@@ -342,6 +346,29 @@ async function runSync(reason: string) {
         }
       }),
     );
+
+    // Original release years: one request per master we haven't seen yet (~1/second).
+    const masters = all<{ master_id: number }>(
+      'SELECT DISTINCT master_id FROM items WHERE master_id IS NOT NULL AND master_id NOT IN (SELECT master_id FROM masters)',
+    );
+    status.phase = 'Fetching original release years';
+    status.done = 0;
+    status.total = masters.length;
+    for (const m of masters) {
+      try {
+        const r = await discogs<{ year?: number }>(`/masters/${m.master_id}`);
+        run('INSERT OR REPLACE INTO masters (master_id, year, fetched_at) VALUES (?, ?, ?)', m.master_id, r.year || null, now());
+      } catch (e) {
+        console.warn(`Master ${m.master_id}: ${(e as Error).message}`);
+      }
+      status.done++;
+    }
+    if (masters.length) {
+      tx(() => {
+        applyOriginalYears();
+        for (const { instance_id } of all<{ instance_id: number }>('SELECT instance_id FROM items')) indexItem(instance_id);
+      });
+    }
 
     // Tracklists for search, for releases we haven't fetched yet (~1/second).
     const missing = all<{ release_id: number }>(
@@ -380,6 +407,11 @@ async function runSync(reason: string) {
     status.running = false;
     status.phase = '';
   }
+}
+
+/** Copies the master's (original) year onto each item; NULL when unknown, so the pressing year is shown instead. */
+function applyOriginalYears() {
+  run('UPDATE items SET orig_year = (SELECT m.year FROM masters m WHERE m.master_id = items.master_id AND m.year > 0)');
 }
 
 /** Runs the sync once a day at SYNC_TIME (local time in TZ). */
