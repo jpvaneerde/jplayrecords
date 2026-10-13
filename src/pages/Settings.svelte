@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type AdminState, type Device, type Display, type Grid, type Run, type ShelfConfig } from '../lib/api';
+  import { api, type AdminState, type Device, type Display, type Grid, type ListenerView, type Run, type ShelfConfig } from '../lib/api';
   import { browse } from '../lib/browse.svelte';
   import { router } from '../lib/router.svelte';
   import { applyTheme, session } from '../lib/session.svelte';
@@ -19,6 +19,10 @@
   let newLink = $state('');
   let anchors = $state<{ id: number; artist: string; title: string; label: string }[]>([]);
   let poll: ReturnType<typeof setInterval> | undefined;
+  let listenerList = $state<ListenerView[]>([]);
+  let newListener = $state({ name: '', room: '', priority: 1, vinyl: false, cd: true });
+  let listenerToken = $state('');
+  let listenerMsg = $state('');
 
   async function load() {
     try {
@@ -28,6 +32,7 @@
       display = { ...st.display };
       shelfDirty = false;
       anchors = (await api.get<{ anchors: typeof anchors }>('/admin/anchors')).anchors;
+      listenerList = (await api.get<{ listeners: ListenerView[] }>('/admin/spins/listeners')).listeners;
       if (st.sync.running) startPolling();
     } catch (e) {
       error = (e as Error).message;
@@ -116,6 +121,35 @@
     session.display = r.display;
     applyTheme(r.display.theme);
     displayMsg = 'Saved. Kiosk screens pick it up when they next reload (or after idle).';
+  }
+
+  const fmts = (v: { vinyl: boolean; cd: boolean }) => [...(v.vinyl ? ['vinyl'] : []), ...(v.cd ? ['cd'] : [])];
+  async function addListener() {
+    listenerMsg = '';
+    try {
+      const r = await api.post<{ token: string; listeners: ListenerView[] }>('/admin/spins/listeners', {
+        name: newListener.name,
+        room: newListener.room,
+        priority: newListener.priority,
+        formats: fmts(newListener),
+      });
+      listenerToken = r.token;
+      listenerList = r.listeners;
+    } catch (e) {
+      listenerMsg = (e as Error).message;
+    }
+  }
+  async function saveListener(l: ListenerView) {
+    const r = await api.put<{ listeners: ListenerView[] }>(`/admin/spins/listeners/${l.id}`, l);
+    listenerList = r.listeners;
+    listenerMsg = 'Saved.';
+  }
+  async function removeListener(l: ListenerView) {
+    const r = await api.del<{ listeners: ListenerView[] }>(`/admin/spins/listeners/${l.id}`);
+    listenerList = r.listeners;
+  }
+  function toggleFormat(l: ListenerView, f: string) {
+    l.formats = l.formats.includes(f) ? l.formats.filter((x) => x !== f) : [...l.formats, f];
   }
 
   async function unpin(id: number) {
@@ -264,6 +298,47 @@
       {/if}
     </section>
 
+    <!-- Listeners (JPlay Spins) -->
+    <section class="card">
+      <h2>Listeners (Spins)</h2>
+      <p class="muted">
+        Each JPlaying Now unit reports what its microphone hears and what its room's moOde plays. When two rooms hear the same
+        song, it counts once, in the room with the <b>highest priority</b>. <b>Formats</b> are what can be played physically in that
+        room (the study has a CD player; the lounge vinyl and CD).
+      </p>
+      {#if listenerList.length}
+        <div class="listeners">
+          {#each listenerList as l (l.id)}
+            <div class="listener">
+              <input bind:value={l.name} aria-label="Name" />
+              <input bind:value={l.room} aria-label="Room" />
+              <input type="number" min="0" max="100" bind:value={l.priority} aria-label="Priority" title="Priority (higher wins)" />
+              <label class="check"><input type="checkbox" checked={l.formats.includes('vinyl')} onchange={() => toggleFormat(l, 'vinyl')} /> Vinyl</label>
+              <label class="check"><input type="checkbox" checked={l.formats.includes('cd')} onchange={() => toggleFormat(l, 'cd')} /> CD</label>
+              <span class="muted small">{l.lastSeenAt ? `seen ${when(l.lastSeenAt)}` : 'not connected yet'}</span>
+              <button class="btn small" onclick={() => saveListener(l)}>Save</button>
+              <button class="btn small danger" onclick={() => removeListener(l)}>Remove</button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      <div class="listener new">
+        <input bind:value={newListener.name} placeholder="Unit name, e.g. Lounge JPlaying Now" aria-label="New listener name" />
+        <input bind:value={newListener.room} placeholder="Room, e.g. Lounge" aria-label="New listener room" />
+        <input type="number" min="0" max="100" bind:value={newListener.priority} aria-label="Priority" title="Priority (higher wins)" />
+        <label class="check"><input type="checkbox" bind:checked={newListener.vinyl} /> Vinyl</label>
+        <label class="check"><input type="checkbox" bind:checked={newListener.cd} /> CD</label>
+        <button class="btn primary" onclick={addListener}>Add listener</button>
+      </div>
+      {#if listenerMsg}<p class="muted">{listenerMsg}</p>{/if}
+      {#if listenerToken}
+        <p class="notice ok">
+          Token for this unit (shown only once). Paste it in the unit's JPlaying Now settings under <b>Spins</b>, with the address
+          <code>{location.origin}</code>:<br /><code class="link">{listenerToken}</code>
+        </p>
+      {/if}
+    </section>
+
     <!-- Display -->
     <section class="card">
       <h2>Kiosk display</h2>
@@ -397,6 +472,24 @@
     align-items: center;
     flex-wrap: wrap;
   }
+  .listeners {
+    display: grid;
+    gap: 8px;
+  }
+  .listener {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 70px auto auto 1fr auto auto;
+    gap: 8px;
+    align-items: center;
+  }
+  .listener.new {
+    grid-template-columns: 1.4fr 1fr 70px auto auto auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+  .small {
+    font-size: 0.8rem;
+  }
   .link {
     word-break: break-all;
     user-select: all;
@@ -415,6 +508,10 @@
   @media (max-width: 860px) {
     .run {
       grid-template-columns: 1fr;
+    }
+    .listener,
+    .listener.new {
+      grid-template-columns: 1fr 1fr;
     }
   }
 </style>

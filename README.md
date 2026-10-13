@@ -60,6 +60,30 @@ How a position is worked out:
 Every value above can be changed under **Settings → Shelves**: rows, compartments, width, fill direction, starting
 row, thicknesses and which formats go where.
 
+## Spins: what was played, where
+
+JPlaying Now units in the lounge and the study ("listeners") report to `POST /api/spins/events`. Each sends what its
+microphone recognises (Shazam) and what its room's moOde is doing. The server turns that into one history at
+**records.jplay.cloud/spins**, and each record page says how often it was put on.
+
+How a song is attributed, about 45 seconds after the last report:
+
+1. **Heard in both rooms** at about the same time: **one play**, in the room with the highest listener priority
+   (the lounge).
+2. **That room's moOde is playing** (radio or files): a **streamed** play there. For radio the microphone supplies
+   the song, because stream metadata is often empty or wrong. When they disagree, the microphone wins.
+3. **moOde idle:** the song is matched against the collection by artist plus album or track title, using the
+   synced tracklists. Only formats the room can play count (study: CD; lounge: vinyl and CD). A match is a
+   **physical** play of that copy. No match means **heard** (TV, a phone, …), which is kept but not counted as
+   a record.
+4. **moOde metadata on its own** also adds streamed plays the microphone missed. Radio time is counted per station
+   even when no song is known.
+5. **Spins:** physical plays of the same copy with less than 20 minutes between them form one "spin", the record
+   being put on.
+
+Listeners are created under **Settings → Listeners**: room, priority, formats, and a token for the unit's
+JPlaying Now settings. On the Spins page the owner can mark a play as "Not a record" or remove it.
+
 ## Run it locally
 
 ```sh
@@ -93,6 +117,8 @@ See [kiosk/README.md](kiosk/README.md): Raspberry Pi OS Lite, cage and Chromium,
 
 ## Later
 
+- **Spins, next steps:** your own cover on the JPlaying Now screen; vinyl vs CD in the lounge from power-metering
+  plugs on the turntable and CD player (via Home Assistant); "Playing now" on the kiosk; stylus hours.
 - **"Do I own this?" on the phone.** The site already works on a phone (sign in on jplay.cloud). Next: a
   barcode scanner page that looks up the barcodes stored with each release.
 - **LED strip (WLED / ESP32) that lights the shelf.** The position API already gives the compartment and

@@ -150,6 +150,13 @@
           {/each}
         </div>
 
+        {#if data?.played?.spins}
+          <p class="played">
+            ♫ Put on {data.played.spins === 1 ? 'once' : `${data.played.spins} times`}{#if data.played.last}, last {new Date(data.played.last.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} in the {data.played.last.room.toLowerCase()}{/if}
+          </p>
+        {:else if data}
+          <p class="played muted">Not played since Spins started listening.</p>
+        {/if}
         {#if it.copies > 1}<p class="notice">You have {it.copies} copies of this release.</p>{/if}
 
         {#if tracks.length}
@@ -349,6 +356,13 @@
   }
   .label {
     margin: 4px 0 0;
+  }
+  .played {
+    margin: 0 0 12px;
+    font-weight: 700;
+  }
+  .played.muted {
+    font-weight: 500;
   }
   .tags {
     display: flex;

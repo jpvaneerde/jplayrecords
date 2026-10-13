@@ -130,6 +130,7 @@ export interface RecordDetail {
   } | null;
   position: Position | null;
   grid: Grid | null;
+  played: { spins: number; tracks: number; last: { at: number; room: string } | null };
   neighbours: { before: ListItem[]; after: ListItem[] };
 }
 
@@ -184,4 +185,62 @@ export interface AdminState {
   grids: Grid[];
   devices: Device[];
   display: Display;
+}
+
+/* ---------- Spins ---------- */
+
+export interface PlayView {
+  id: number;
+  room: string;
+  kind: 'physical' | 'streamed' | 'heard';
+  detail: string;
+  station: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  title: string;
+  artist: string;
+  album: string;
+  cover: string | null;
+  instanceId: number | null;
+  record: { id: number; artist: string; title: string; year: number | null } | null;
+  confidence: string;
+  heardBy: string[];
+}
+
+export interface SpinView {
+  instanceId: number;
+  room: string;
+  medium: string;
+  startedAt: number;
+  endedAt: number;
+  tracks: number;
+  record: { id: number; artist: string; title: string; year: number | null; cover: string | null };
+}
+
+export interface RoomNow {
+  room: string;
+  online: boolean;
+  session: { mode: string; station: string; startedAt: number } | null;
+  play: PlayView | null;
+}
+
+export interface SpinStats {
+  days: number;
+  physical: { spins: number; tracks: number; vinylHours: number };
+  streamed: { tracks: number };
+  heard: { tracks: number };
+  radio: { room: string; station: string; hours: number }[];
+  streamingHours: number;
+  topArtists: { artist: string; n: number }[];
+  topRecords: { id: number; artist: string; title: string; cover: string | null; spins: number }[];
+}
+
+export interface ListenerView {
+  id: string;
+  name: string;
+  room: string;
+  priority: number;
+  formats: string[];
+  createdAt: number;
+  lastSeenAt: number | null;
 }

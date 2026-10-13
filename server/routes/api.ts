@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import { access, newDevice, requireAdmin, requireViewer, type Env } from '../auth.ts';
 import { DISCOGS_TOKEN, JPLAY_API, JPLAY_LOGIN_URL, PUBLIC_URL, SYNC_TIME, TZ } from '../config.ts';
 import { all, get, getSetting, run, setSetting, YEAR, type ItemRow } from '../db.ts';
+import { playedStats } from '../spins.ts';
 import { coverFiles, customFields, fetchRelease, releaseDetails, startSync, syncStatus } from '../discogs.ts';
 import {
   compartmentMembers,
@@ -228,6 +229,7 @@ records.get('/:id', async (c) => {
   };
   const grid = position?.run ? grids().find((g) => g.id === position.run) : null;
   const copies = get<{ n: number }>('SELECT COUNT(*) AS n FROM items WHERE release_id = ?', r.release_id)!.n;
+  const played = playedStats(id);
   return c.json({
     item: {
       ...listItem(r),
@@ -245,6 +247,7 @@ records.get('/:id', async (c) => {
     details,
     position,
     grid,
+    played,
     neighbours: { before: byIds(nb.before), after: byIds(nb.after) },
   });
 });

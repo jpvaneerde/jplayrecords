@@ -8,6 +8,7 @@
   import Browse from './pages/Browse.svelte';
   import Record from './pages/Record.svelte';
   import Settings from './pages/Settings.svelte';
+  import Spins from './pages/Spins.svelte';
   import Welcome from './pages/Welcome.svelte';
 
   let saver = $state(false);
@@ -19,7 +20,7 @@
     if (session.kiosk && session.role) {
       idle.start(session.display.idleSeconds, async () => {
         // Nobody here: back to the start, fresh settings, cover wall.
-        if (router.path !== '/settings') {
+        if (router.path !== '/settings' && router.path !== '/spins') {
           browse.clear();
           router.go('/', true);
         }
@@ -42,6 +43,8 @@
   {:else}
     <Welcome />
   {/if}
+{:else if router.path === '/spins'}
+  <Spins />
 {:else}
   <Browse />
   {#if recordId}

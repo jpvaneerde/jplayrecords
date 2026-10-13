@@ -78,6 +78,7 @@
     </div>
 
     <button class="btn big primary" onclick={random} title="Pick something for me">🎲 <span class="hide-s">Random</span></button>
+    <a class="btn big" href="/spins" onclick={router.link} title="What was played">♫ <span class="hide-s">Spins</span></a>
     {#if session.isAdmin}
       <a class="btn icon" href="/settings" onclick={router.link} aria-label="Settings">⚙</a>
     {/if}

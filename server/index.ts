@@ -10,6 +10,8 @@ import { COVER_DIR, getSetting } from './db.ts';
 import { linkDevice, requireViewer, type Env } from './auth.ts';
 import { admin, records, session } from './routes/api.ts';
 import { scheduleNightly, startSync } from './discogs.ts';
+import { spins, spinsAdmin, spinsIngest } from './routes/spins.ts';
+import { startSpinsWorker } from './spins.ts';
 
 const app = new Hono<Env>();
 
@@ -37,6 +39,9 @@ app.use('/api/*', async (c, next) => {
 
 app.route('/api/session', session);
 app.route('/api/records', records);
+app.route('/api/spins/events', spinsIngest);
+app.route('/api/spins', spins);
+app.route('/api/admin/spins', spinsAdmin);
 app.route('/api/admin', admin);
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
 
@@ -96,6 +101,7 @@ if (existsSync(STATIC_DIR)) {
 }
 
 serve({ fetch: app.fetch, port: PORT, hostname: '0.0.0.0' }, () => {
+  startSpinsWorker();
   console.log(`JPlay Records listening on :${PORT} (public URL ${PUBLIC_URL}, data in ${DATA_DIR})`);
   if (DEV_ADMIN) console.log('DEV_ADMIN=1: everyone is the admin (local development only).');
   else if (!JPLAY_API || !ADMIN_EMAIL) console.log('JPLAY_API or ADMIN_EMAIL is not set: nobody can open Settings.');
