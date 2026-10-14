@@ -72,17 +72,27 @@ How a song is attributed, about 45 seconds after the last report:
    (the lounge).
 2. **That room's moOde is playing** (radio or files): a **streamed** play there. For radio the microphone supplies
    the song, because stream metadata is often empty or wrong. When they disagree, the microphone wins.
-3. **moOde idle:** the song is matched against the collection by artist plus album or track title, using the
-   synced tracklists. Only formats the room can play count (study: CD; lounge: vinyl and CD). A match is a
-   **physical** play of that copy. No match means **heard** (TV, a phone, …), which is kept but not counted as
-   a record.
+3. **moOde idle:** the song is matched against the collection. Only formats the room can play count (study: CD;
+   lounge: vinyl and CD):
+   - **Vinyl or CD:** if you own it on vinyl, it's vinyl; otherwise on CD, it's CD. Your copy is found by artist
+     plus album or track title, using the synced tracklists.
+   - **Artist only:** if only the artist matches, it's still counted as that format:
+     - with **one** record by that artist, as that record
+     - with **several**, as "which record?", which you pick on the Spins page
+   - **Not in collection:** nothing matched (TV, a phone, …). These plays are kept but not counted as records, and
+     the page says why.
 4. **moOde metadata on its own** also adds streamed plays the microphone missed. Radio time is counted per station
    even when no song is known.
 5. **Spins:** physical plays of the same copy with less than 20 minutes between them form one "spin", the record
    being put on.
 
 Listeners are created under **Settings → Listeners**: room, priority, formats, and a token for the unit's
-JPlaying Now settings. On the Spins page the owner can mark a play as "Not a record" or remove it.
+JPlaying Now settings.
+
+**Corrections** on the Spins page (owner only): **Which record?** / **It was my record…** opens a picker with
+suggestions and a search of your collection. From there you can pick the copy, mark it **Not one of my records**,
+or press **Match automatically** to undo a correction. After every Discogs sync, and on start, plays that weren't
+matched or weren't certain are matched again. **Match again** does the same on demand.
 
 ## Run it locally
 

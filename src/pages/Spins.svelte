@@ -5,6 +5,7 @@
   import { router } from '../lib/router.svelte';
   import { session } from '../lib/session.svelte';
   import Logo from '../lib/ui/Logo.svelte';
+  import RecordPicker from '../lib/ui/RecordPicker.svelte';
 
   type Tab = 'records' | 'all' | 'streamed' | 'heard';
   let tab = $state<Tab>('records');
@@ -16,6 +17,8 @@
   let total = $state(0);
   let stats = $state<SpinStats | null>(null);
   let error = $state('');
+  let picking = $state<PlayView | null>(null);
+  let rematchMsg = $state('');
 
   async function loadNow() {
     try {
@@ -69,11 +72,19 @@
     return () => clearInterval(t);
   });
 
-  async function notARecord(p: PlayView) {
-    await api.put(`/admin/spins/plays/${p.id}`, { heard: true });
+  function refresh() {
+    picking = null;
     loadList();
     loadStats();
+    loadNow();
   }
+  async function matchAgain() {
+    const r = await api.post<{ changed: number }>('/admin/spins/rematch');
+    rematchMsg = r.changed ? `${r.changed} plays updated.` : 'Nothing changed.';
+    refresh();
+  }
+  /** Plays worth a second look: not in the collection, or not sure which copy. */
+  const unsure = (p: PlayView) => p.kind === 'heard' || (p.kind === 'physical' && (!p.record || p.confidence === 'ambiguous' || p.confidence === 'likely'));
   async function remove(p: PlayView) {
     await api.del(`/admin/spins/plays/${p.id}`);
     loadList();
@@ -81,7 +92,7 @@
   }
 
   const label: Record<string, string> = { vinyl: 'Vinyl', cd: 'CD', cassette: 'Cassette', radio: 'Radio', file: 'moOde', stream: 'Stream' };
-  const badge = (p: { kind: string; detail: string }) => (p.kind === 'heard' ? 'Heard' : label[p.detail] ?? p.detail ?? p.kind);
+  const badge = (p: { kind: string; detail: string }) => (p.kind === 'heard' ? 'Not in collection' : label[p.detail] ?? p.detail ?? p.kind);
   const time = (t: number) => {
     const d = new Date(t);
     const today = new Date();
@@ -98,7 +109,7 @@
     { key: 'records', label: 'Records put on' },
     { key: 'all', label: 'Everything' },
     { key: 'streamed', label: 'Streamed' },
-    { key: 'heard', label: 'Heard' },
+    { key: 'heard', label: 'Not in collection' },
   ];
 </script>
 
@@ -177,7 +188,11 @@
           {/each}
         </ul>
       {:else}
-        <p class="muted count">{total.toLocaleString('sv-SE')} plays</p>
+        <p class="muted count">
+          {total.toLocaleString('sv-SE')} plays
+          {#if tab === 'heard'}· songs the microphone recognised that didn't come from moOde and that aren't on a record or CD you own (TV, a phone…).{/if}
+          {#if session.isAdmin}<button class="btn small ghost" onclick={matchAgain}>Match again</button> {rematchMsg}{/if}
+        </p>
         <ul class="list">
           {#each plays as p (p.id)}
             <li>
@@ -187,7 +202,8 @@
                 </button>
                 <span class="txt">
                   <span class="t">{p.title}</span>
-                  <span class="a">{p.artist}{p.record ? ` · ${p.record.title}` : p.album ? ` · ${p.album}` : ''}</span>
+                  <span class="a">{p.artist}{p.record ? ` · ${p.record.title}` : p.kind === 'physical' ? ' · which record?' : p.album ? ` · ${p.album}` : ''}</span>
+                  {#if p.note && unsure(p)}<span class="note">{p.note}</span>{/if}
                 </span>
                 <span class="meta">
                   <span class="tag" data-kind={p.kind}>{badge(p)}{p.station ? ` · ${p.station}` : ''}{p.confidence === 'ambiguous' ? ' ?' : ''}</span>
@@ -195,7 +211,11 @@
                 </span>
                 {#if session.isAdmin}
                   <span class="acts">
-                    {#if p.kind === 'physical'}<button class="btn small ghost" onclick={() => notARecord(p)}>Not a record</button>{/if}
+                    {#if p.kind !== 'streamed'}
+                      <button class="btn small" class:primary={unsure(p)} class:ghost={!unsure(p)} onclick={() => (picking = p)}>
+                        {p.kind === 'heard' ? 'It was my record…' : unsure(p) ? 'Which record?' : 'Change…'}
+                      </button>
+                    {/if}
                     <button class="btn small ghost" onclick={() => remove(p)} aria-label="Remove this play">✕</button>
                   </span>
                 {/if}
@@ -247,6 +267,10 @@
     </aside>
   </div>
 </div>
+
+{#if picking}
+  <RecordPicker play={picking} onclose={() => (picking = null)} ondone={refresh} />
+{/if}
 
 <style>
   .page {
@@ -427,6 +451,14 @@
   }
   .tag[data-kind='streamed'] {
     color: var(--blue);
+  }
+  .note {
+    font-size: 0.78rem;
+    color: var(--muted);
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .acts {
     display: flex;

@@ -15,7 +15,7 @@
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { all, db, get, now, run, tx, type ItemRow } from './db.ts';
-import { coverFiles, releaseDetails } from './discogs.ts';
+import { afterSync, coverFiles, releaseDetails } from './discogs.ts';
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS listeners (
@@ -80,6 +80,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS room_sessions_room ON room_sessions (room, ended_at);
 `);
 
+// Additive migrations for databases created by earlier versions.
+{
+  const cols = (db.prepare('PRAGMA table_info(plays)').all() as { name: string }[]).map((c) => c.name);
+  if (!cols.includes('note')) db.exec('ALTER TABLE plays ADD COLUMN note TEXT'); // why it matched (or didn't)
+}
+
 const SETTLE_MS = 45_000; // wait this long for the other room's report before deciding
 const SAME_SONG_MS = 180_000; // same song within this window = one play
 const RADIO_CONFLICT_MS = 150_000;
@@ -136,13 +142,16 @@ export function listenerByToken(token: string): Listener | undefined {
 
 function roomInfo() {
   const rows = all<{ room: string; priority: number; formats: string }>('SELECT room, priority, formats FROM listeners');
-  const map = new Map<string, { priority: number; formats: Set<string> }>();
+  const map = new Map<string, { priority: number; formats: string[] }>();
   for (const r of rows) {
-    const cur = map.get(r.room) ?? { priority: -Infinity, formats: new Set<string>() };
+    const cur = map.get(r.room) ?? { priority: -Infinity, formats: [] };
     cur.priority = Math.max(cur.priority, r.priority);
-    for (const f of JSON.parse(r.formats) as string[]) cur.formats.add(f);
+    for (const f of JSON.parse(r.formats) as string[]) if (!cur.formats.includes(f)) cur.formats.push(f);
     map.set(r.room, cur);
   }
+  // Vinyl first: when you own a song on vinyl and CD, the lounge plays the record.
+  const order = ['vinyl', 'cd', 'cassette'];
+  for (const v of map.values()) v.formats.sort((x, y) => order.indexOf(x) - order.indexOf(y));
   return map;
 }
 
@@ -196,6 +205,7 @@ export function norm(s: unknown): string {
     .replace(/\p{M}/gu, '')
     .replace(/\(.*?\)|\[.*?\]/g, ' ')
     .replace(/\s+-\s+.*$/, '')
+    .replace(/\s+(feat\.?|ft\.?|featuring)\s+.*$/, '')
     .replace(/^the\s+/, '')
     .replace(/&/g, ' and ')
     .replace(/[^a-z0-9]+/g, ' ')
@@ -244,79 +254,145 @@ export function mediumOf(it: Pick<ItemRow, 'format' | 'format_text'>): string {
   return f.toLowerCase() || 'other';
 }
 
-interface Match {
-  instanceId: number;
-  releaseId: number;
+export interface Match {
+  /** Your copy, when it's clear which one; null = "a record by this artist", pick it on the Spins page. */
+  instanceId: number | null;
+  releaseId: number | null;
   medium: string;
-  ambiguous: boolean;
+  confidence: 'mic' | 'likely' | 'ambiguous';
+  note: string;
   alternatives: number[];
 }
 
-/** Which of your copies is this song from? Only copies in a format this room can play. */
-export function matchCollection(artist: string, title: string, album: string, formats: Set<string>): Match | null {
+const MEDIUM_LABEL: Record<string, string> = { vinyl: 'vinyl', cd: 'CD', cassette: 'cassette' };
+
+function wordsOf(s: string) {
+  return s.split(' ').filter((w) => w.length > 1 && w !== 'and');
+}
+
+/** How alike two artist names are: 3 = same, 2 = one contains the other, 1 = most words shared, 0 = different. */
+function artistSimilarity(x: string, y: string) {
+  if (!x || !y) return 0;
+  if (x === y) return 3;
+  if (x.includes(y) || y.includes(x)) return 2;
+  const a = new Set(wordsOf(x));
+  const b = new Set(wordsOf(y));
+  if (!a.size || !b.size) return 0;
+  const shared = [...a].filter((w) => b.has(w)).length;
+  return shared / Math.max(a.size, b.size) >= 0.6 ? 1 : 0;
+}
+
+/**
+ * Which of your copies is this song from? Only copies in a format this room can play.
+ * Rule: if you own it on a format the room plays, it's that format (vinyl before CD); otherwise null ("heard").
+ *  - artist + album or track title match → that copy
+ *  - only the artist matches → the one copy by that artist whose tracklist isn't known to lack the song,
+ *    or, when there are several, "a record by <artist>" without a specific copy (pick it on the Spins page)
+ */
+export function matchCollection(artist: string, title: string, album: string, formats: string[]): Match | null {
   const a = norm(artist);
   const t = norm(title);
   const al = norm(album);
   if (!a || !t) return null;
-  const words = (s: string) =>
-    s
-      .split(' ')
-      .filter((w) => w.length > 1 || s.length <= 2)
-      .slice(0, 6)
-      .map((w) => `"${w}"*`)
-      .join(' ');
-  let rows: ItemRow[] = [];
-  try {
-    rows = all<ItemRow>(
-      `SELECT * FROM items WHERE instance_id IN (SELECT rowid FROM search WHERE search MATCH ?) LIMIT 300`,
-      `artist : (${words(a)})`,
-    );
-    if (!rows.length) {
-      // Compilations and "featuring" credits: look for the title in the tracklists.
-      rows = all<ItemRow>(
-        `SELECT * FROM items WHERE instance_id IN (SELECT rowid FROM search WHERE search MATCH ?) LIMIT 300`,
-        `tracks : (${words(t)})`,
-      );
+  const fts = (col: string, s: string, op: 'OR' | 'AND') => {
+    const w = wordsOf(s).slice(0, 8).map((x) => `"${x.replace(/"/g, '')}"*`);
+    return w.length ? `${col} : (${w.join(` ${op} `)})` : '';
+  };
+  const byId = new Map<number, ItemRow>();
+  for (const q of [fts('artist', a, 'OR'), fts('tracks', t, 'AND')]) {
+    if (!q) continue;
+    try {
+      for (const r of all<ItemRow>('SELECT * FROM items WHERE instance_id IN (SELECT rowid FROM search WHERE search MATCH ?) LIMIT 600', q)) {
+        byId.set(r.instance_id, r);
+      }
+    } catch {
+      /* odd characters in the query: skip */
     }
-  } catch {
-    return null;
   }
-  const scored: { row: ItemRow; score: number; medium: string }[] = [];
-  for (const row of rows) {
+  const pref = (m: string) => (formats.length ? formats.indexOf(m) : 0);
+  type Cand = { row: ItemRow; medium: string; tier: number; score: number };
+  const cands: Cand[] = [];
+  for (const row of byId.values()) {
     const medium = mediumOf(row);
-    if (formats.size && !formats.has(medium)) continue;
-    const ia = norm(row.artist);
-    let artistScore = 0;
-    if (ia === a) artistScore = 3;
-    else if (ia && (ia.includes(a) || a.includes(ia))) artistScore = 2;
+    let artistScore = artistSimilarity(norm(row.artist), a);
     const it = norm(row.title);
     let albumScore = 0;
     if (al && it === al) albumScore = 5;
     else if (al && it && (it.includes(al) || al.includes(it))) albumScore = 2;
+    const tracklist = releaseDetails(row.release_id)?.tracklist;
     let trackScore = 0;
-    for (const tr of releaseDetails(row.release_id)?.tracklist ?? []) {
+    for (const tr of tracklist ?? []) {
       if (tr.heading) continue;
       const tt = norm(tr.title);
-      const trackArtistOk = !tr.artists || norm(tr.artists).includes(a) || a.includes(norm(tr.artists));
+      const trackArtist = norm(tr.artists ?? '');
+      const trackArtistOk = !trackArtist || artistSimilarity(trackArtist, a) > 0;
       if (tt === t) trackScore = Math.max(trackScore, trackArtistOk ? 4 : 2);
       else if (tt && (tt.includes(t) || t.includes(tt)) && Math.min(tt.length, t.length) >= 4) trackScore = Math.max(trackScore, 2);
+      // Compilation: the track's own artist counts as the artist.
+      if (tt === t && trackArtist && artistSimilarity(trackArtist, a) >= 2) artistScore = Math.max(artistScore, 2);
     }
-    // Compilation found via its tracklist: the track artist stands in for the album artist.
-    if (!artistScore && trackScore >= 4) artistScore = 2;
-    const score = artistScore + albumScore + trackScore;
-    if (artistScore && (albumScore || trackScore) && score >= 5) scored.push({ row, score, medium });
+    if (!artistScore) continue;
+    if (formats.length && pref(medium) < 0) continue;
+    if (albumScore || trackScore) cands.push({ row, medium, tier: 2, score: artistScore + albumScore + trackScore });
+    // Artist only: possible unless we know its tracklist and the song isn't on it.
+    else if (!tracklist?.length) cands.push({ row, medium, tier: 1, score: artistScore });
   }
-  if (!scored.length) return null;
-  scored.sort((x, y) => y.score - x.score || x.row.discogs_rank - y.row.discogs_rank);
-  const best = scored[0];
-  const top = scored.filter((s) => s.score === best.score);
+  if (!cands.length) return null;
+  // Best evidence first, then the room's preferred format (vinyl before CD), then the closest match.
+  cands.sort((x, y) => y.tier - x.tier || pref(x.medium) - pref(y.medium) || y.score - x.score || x.row.discogs_rank - y.row.discogs_rank);
+  const best = cands[0];
+  const sameLevel = cands.filter((c) => c.tier === best.tier && c.medium === best.medium);
+  const alternatives = cands.filter((c) => c !== best).slice(0, 8).map((c) => c.row.instance_id);
+  const label = MEDIUM_LABEL[best.medium] ?? best.medium;
+  if (best.tier === 2) {
+    const top = sameLevel.filter((c) => c.score === best.score);
+    return {
+      instanceId: best.row.instance_id,
+      releaseId: best.row.release_id,
+      medium: best.medium,
+      confidence: top.length > 1 ? 'ambiguous' : 'mic',
+      note: top.length > 1 ? `${top.length} of your ${label} copies match; picked one` : `Matched your ${label}`,
+      alternatives,
+    };
+  }
+  if (sameLevel.length === 1) {
+    return {
+      instanceId: best.row.instance_id,
+      releaseId: best.row.release_id,
+      medium: best.medium,
+      confidence: 'likely',
+      note: `Your only ${label} by ${best.row.artist} (its tracklist isn't known yet)`,
+      alternatives,
+    };
+  }
   return {
-    instanceId: best.row.instance_id,
-    releaseId: best.row.release_id,
+    instanceId: null,
+    releaseId: null,
     medium: best.medium,
-    ambiguous: top.length > 1,
-    alternatives: scored.slice(1, 6).map((s) => s.row.instance_id),
+    confidence: 'ambiguous',
+    note: `One of your ${sameLevel.length} ${label} records by ${best.row.artist}`,
+    alternatives: sameLevel.slice(0, 8).map((c) => c.row.instance_id),
   };
+}
+
+/** Why a song didn't match anything you own (shown on the Spins page). */
+export function whyNotOwned(artist: string, formats: string[]): string {
+  const a = norm(artist);
+  if (!a) return 'No artist';
+  let rows: ItemRow[] = [];
+  try {
+    const w = wordsOf(a).slice(0, 8).map((x) => `"${x}"*`);
+    if (w.length) rows = all<ItemRow>('SELECT * FROM items WHERE instance_id IN (SELECT rowid FROM search WHERE search MATCH ?) LIMIT 300', `artist : (${w.join(' OR ')})`);
+  } catch {
+    /* ignore */
+  }
+  const mine = rows.filter((r) => artistSimilarity(norm(r.artist), a) > 0);
+  if (!mine.length) return `${artist} isn't in your collection`;
+  const media = [...new Set(mine.map((r) => mediumOf(r)))];
+  if (formats.length && !media.some((m) => formats.includes(m))) {
+    return `You have ${artist} only on ${media.map((m) => MEDIUM_LABEL[m] ?? m).join(' and ')}, which doesn't play in this room`;
+  }
+  return `You have ${artist}, but not this song on a record or CD`;
 }
 
 interface Attribution {
@@ -325,6 +401,7 @@ interface Attribution {
   detail: string;
   station: string | null;
   match: Match | null;
+  note: string;
 }
 
 function attribute(heard: string[], ts: number, artist: string, title: string, album: string): Attribution {
@@ -334,12 +411,13 @@ function attribute(heard: string[], ts: number, artist: string, title: string, a
   // A room that heard it is streaming from moOde → that stream.
   for (const r of byPrio) {
     const s = roomStateAt(r, ts);
-    if (s?.state === 'play') return { room: r, kind: 'streamed', detail: s.mode || 'stream', station: s.station || null, match: null };
+    if (s?.state === 'play') return { room: r, kind: 'streamed', detail: s.mode || 'stream', station: s.station || null, match: null, note: '' };
   }
   const room = byPrio[0];
-  const match = matchCollection(artist, title, album, rooms.get(room)?.formats ?? new Set());
-  if (match) return { room, kind: 'physical', detail: match.medium, station: null, match };
-  return { room, kind: 'heard', detail: '', station: null, match: null };
+  const formats = rooms.get(room)?.formats ?? [];
+  const match = matchCollection(artist, title, album, formats);
+  if (match) return { room, kind: 'physical', detail: match.medium, station: null, match, note: match.note };
+  return { room, kind: 'heard', detail: '', station: null, match: null, note: whyNotOwned(artist, formats) };
 }
 
 interface PlayRow {
@@ -361,6 +439,7 @@ interface PlayRow {
   heard_by: string;
   alternatives: string;
   mic_ids: string;
+  note: string | null;
 }
 
 /* ---------- processing ---------- */
@@ -378,6 +457,13 @@ function scheduleProcessing() {
 export function startSpinsWorker() {
   setInterval(processEvents, 20_000).unref();
   processEvents();
+  // New records or tracklists from Discogs (and newer matching rules after an update) can explain earlier plays.
+  const again = (why: string) => {
+    const n = rematch();
+    if (n) console.log(`Spins: ${n} plays matched again (${why})`);
+  };
+  afterSync.push(() => again('after sync'));
+  again('on start');
 }
 
 export function processEvents(at = now()) {
@@ -555,7 +641,7 @@ function savePlay(
   a: Attribution,
   p: { start: number; heard: string[]; micIds: string[]; title: string; artist: string; album: string; cover: string | null; key: string },
 ) {
-  const confidence = a.match?.ambiguous ? 'ambiguous' : 'mic';
+  const confidence = a.match?.confidence ?? 'mic';
   const values = [
     a.room,
     a.kind,
@@ -573,18 +659,19 @@ function savePlay(
     JSON.stringify(p.heard),
     JSON.stringify(a.match?.alternatives ?? []),
     JSON.stringify(p.micIds),
+    a.note || null,
   ] as const;
   if (id == null) {
     run(
       `INSERT INTO plays (room, kind, detail, station, started_at, title, artist, album, cover, song_key, instance_id, release_id,
-         confidence, heard_by, alternatives, mic_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         confidence, heard_by, alternatives, mic_ids, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ...values,
       now(),
     );
   } else {
     run(
       `UPDATE plays SET room = ?, kind = ?, detail = ?, station = ?, started_at = ?, title = ?, artist = ?, album = ?, cover = ?,
-         song_key = ?, instance_id = ?, release_id = ?, confidence = ?, heard_by = ?, alternatives = ?, mic_ids = ? WHERE id = ?`,
+         song_key = ?, instance_id = ?, release_id = ?, confidence = ?, heard_by = ?, alternatives = ?, mic_ids = ?, note = ? WHERE id = ?`,
       ...values,
       id,
     );
@@ -620,10 +707,13 @@ export interface PlayView {
   record: { id: number; artist: string; title: string; year: number | null } | null;
   confidence: string;
   heardBy: string[];
+  note: string | null;
+  alternatives: { id: number; artist: string; title: string; medium: string; cover: string | null }[];
 }
 
 function view(rows: PlayRow[]): PlayView[] {
-  const ids = [...new Set(rows.map((r) => r.instance_id).filter((x): x is number => x != null))];
+  const alt = (r: PlayRow) => (r.kind === 'physical' ? (JSON.parse(r.alternatives) as number[]).filter((i) => i !== r.instance_id) : []);
+  const ids = [...new Set([...rows.map((r) => r.instance_id).filter((x): x is number => x != null), ...rows.flatMap(alt)])];
   const items = new Map(
     (ids.length ? all<ItemRow>(`SELECT * FROM items WHERE instance_id IN (${ids.join(',')})`) : []).map((i) => [i.instance_id, i]),
   );
@@ -645,6 +735,11 @@ function view(rows: PlayRow[]): PlayView[] {
       record: it ? { id: it.instance_id, artist: it.artist, title: it.title, year: it.orig_year ?? it.year } : null,
       confidence: r.confidence,
       heardBy: JSON.parse(r.heard_by),
+      note: r.note,
+      alternatives: alt(r)
+        .map((i) => items.get(i))
+        .filter((x): x is ItemRow => !!x)
+        .map((x) => ({ id: x.instance_id, artist: x.artist, title: x.title, medium: mediumOf(x), cover: coverFiles(x.cover).small })),
     };
   });
 }
@@ -794,14 +889,60 @@ export function deletePlay(id: number) {
 }
 
 export function markHeard(id: number) {
-  run("UPDATE plays SET kind = 'heard', detail = '', instance_id = NULL, release_id = NULL, confidence = 'manual' WHERE id = ?", id);
+  run("UPDATE plays SET kind = 'heard', detail = '', instance_id = NULL, release_id = NULL, confidence = 'manual', note = 'Marked as not your record' WHERE id = ?", id);
+}
+
+/**
+ * Match "heard" plays and physical plays without a specific copy again — after a sync brought new records or
+ * tracklists, or after the matching rules changed. Plays you corrected by hand are left alone.
+ */
+export function rematch(days = 90): number {
+  const rows = all<PlayRow>(
+    `SELECT * FROM plays WHERE started_at >= ? AND confidence <> 'manual'
+       AND (kind = 'heard' OR (kind = 'physical' AND (instance_id IS NULL OR confidence IN ('likely', 'ambiguous'))))`,
+    now() - days * 86_400_000,
+  );
+  return rematchRows(rows);
+}
+
+function rematchRows(rows: PlayRow[]): number {
+  const rooms = roomInfo();
+  let changed = 0;
+  tx(() => {
+    for (const r of rows) {
+      const formats = rooms.get(r.room)?.formats ?? [];
+      const m = matchCollection(r.artist, r.title, r.album, formats);
+      const kind = m ? 'physical' : 'heard';
+      const note = m ? m.note : whyNotOwned(r.artist, formats);
+      if (r.confidence !== 'manual' && kind === r.kind && (m?.instanceId ?? null) === r.instance_id && (m?.medium ?? '') === r.detail && note === r.note) continue;
+      run(
+        'UPDATE plays SET kind = ?, detail = ?, instance_id = ?, release_id = ?, confidence = ?, alternatives = ?, note = ? WHERE id = ?',
+        kind,
+        m?.medium ?? '',
+        m?.instanceId ?? null,
+        m?.releaseId ?? null,
+        m?.confidence ?? 'mic',
+        JSON.stringify(m?.alternatives ?? []),
+        note,
+        r.id,
+      );
+      changed++;
+    }
+  });
+  return changed;
+}
+
+/** Undo a correction: let the matching decide again (streamed plays stay streamed). */
+export function resetPlay(id: number) {
+  const r = get<PlayRow>("SELECT * FROM plays WHERE id = ? AND kind <> 'streamed'", id);
+  if (r) rematchRows([r]);
 }
 
 export function setPlayRecord(id: number, instanceId: number) {
   const it = get<ItemRow>('SELECT * FROM items WHERE instance_id = ?', instanceId);
   if (!it) return false;
   run(
-    "UPDATE plays SET kind = 'physical', detail = ?, instance_id = ?, release_id = ?, confidence = 'manual' WHERE id = ?",
+    "UPDATE plays SET kind = 'physical', detail = ?, instance_id = ?, release_id = ?, confidence = 'manual', note = 'Picked by you' WHERE id = ?",
     mediumOf(it),
     it.instance_id,
     it.release_id,

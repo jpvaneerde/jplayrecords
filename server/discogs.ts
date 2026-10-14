@@ -129,6 +129,9 @@ const status: SyncStatus = {
   count: 0,
 };
 
+/** Called after every successful sync (JPlay Spins matches earlier plays again). */
+export const afterSync: (() => void)[] = [];
+
 export function syncStatus(): SyncStatus {
   return { ...status, count: get<{ n: number }>('SELECT COUNT(*) AS n FROM items')!.n };
 }
@@ -398,6 +401,13 @@ async function runSync(reason: string) {
     status.lastSyncAt = now();
     setSetting('lastSyncAt', status.lastSyncAt);
     setSetting('lastSyncError', null);
+    for (const fn of afterSync) {
+      try {
+        fn();
+      } catch (e) {
+        console.error('After-sync step failed:', (e as Error).message);
+      }
+    }
     console.log(`Sync done: ${seen.length} items, ${uniq.length} new covers, ${missing.length} tracklists`);
   } catch (e) {
     status.lastError = (e as Error).message;

@@ -205,6 +205,10 @@ export interface PlayView {
   record: { id: number; artist: string; title: string; year: number | null } | null;
   confidence: string;
   heardBy: string[];
+  /** Why it was matched this way (or why it isn't yours). */
+  note: string | null;
+  /** Other copies it could have been. */
+  alternatives: { id: number; artist: string; title: string; medium: string; cover: string | null }[];
 }
 
 export interface SpinView {

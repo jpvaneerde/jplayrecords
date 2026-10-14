@@ -12,6 +12,8 @@ import {
   markHeard,
   nowPlaying,
   recentSpins,
+  rematch,
+  resetPlay,
   setPlayRecord,
   stats,
   updateListener,
@@ -90,16 +92,19 @@ spinsAdmin.delete('/listeners/:id', (c) => {
   return c.json({ listeners: listeners() });
 });
 
+spinsAdmin.post('/rematch', (c) => c.json({ changed: rematch(Number(c.req.query('days')) || 365) }));
+
 spinsAdmin.delete('/plays/:id', (c) => {
   deletePlay(Number(c.req.param('id')));
   return c.json({ ok: true });
 });
 
-/** {heard: true} = "not one of my records"; {record: <instance id>} = "it was this copy". */
+/** {heard: true} = "not one of my records"; {record: <instance id>} = "it was this copy"; {auto: true} = undo. */
 spinsAdmin.put('/plays/:id', async (c) => {
-  const b = await c.req.json<{ heard?: boolean; record?: number }>();
+  const b = await c.req.json<{ heard?: boolean; record?: number; auto?: boolean }>();
   const id = Number(c.req.param('id'));
-  if (b.heard) markHeard(id);
+  if (b.auto) resetPlay(id);
+  else if (b.heard) markHeard(id);
   else if (b.record && !setPlayRecord(id, Number(b.record))) throw bad('That record is not in the collection.', 404);
   return c.json({ ok: true });
 });
