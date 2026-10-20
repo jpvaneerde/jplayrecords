@@ -302,7 +302,7 @@
     <section class="card">
       <h2>Listeners (Spins)</h2>
       <p class="muted">
-        Each JPlaying Now unit reports what its microphone hears and what its room's moOde plays. When two rooms hear the same
+        Each JPlaying Now unit reports what its microphone hears and what its room's JPlay player plays. When two rooms hear the same
         song, it counts once, in the room with the <b>highest priority</b>. <b>Formats</b> are what can be played physically in that
         room (the study has a CD player; the lounge vinyl and CD).
       </p>

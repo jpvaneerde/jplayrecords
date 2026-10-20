@@ -63,16 +63,21 @@ row, thicknesses and which formats go where.
 ## Spins: what was played, where
 
 JPlaying Now units in the lounge and the study ("listeners") report to `POST /api/spins/events`. Each sends what its
-microphone recognises (Shazam) and what its room's moOde is doing. The server turns that into one history at
+microphone recognises (Shazam) and what its room's JPlay player is doing: which source (Radio, Plex, CD, Spotify,
+Bluetooth), which station and which song. The server turns that into one history at
 **records.jplay.cloud/spins**, and each record page says how often it was put on.
 
 How a song is attributed, about 45 seconds after the last report:
 
 1. **Heard in both rooms** at about the same time: **one play**, in the room with the highest listener priority
    (the lounge).
-2. **That room's moOde is playing** (radio or files): a **streamed** play there. For radio the microphone supplies
-   the song, because stream metadata is often empty or wrong. When they disagree, the microphone wins.
-3. **moOde idle:** the song is matched against the collection. Only formats the room can play count (study: CD;
+2. **That room's JPlay player is playing:**
+   - a **CD in the player**: a **physical** play of your CD (which copy is found in the collection; if it isn't
+     there, it's still a CD play, without a copy)
+   - **Radio, Plex, Spotify or Bluetooth**: a **streamed** play, labelled with that source. For radio without song
+     names, the unit recognises the song from the stream itself; when the microphone heard something else at that
+     moment, the microphone wins.
+3. **Player idle:** the song is matched against the collection. Only formats the room can play count (study: CD;
    lounge: vinyl and CD):
    - **Vinyl or CD:** if you own it on vinyl, it's vinyl; otherwise on CD, it's CD. Your copy is found by artist
      plus album or track title, using the synced tracklists.
@@ -81,8 +86,8 @@ How a song is attributed, about 45 seconds after the last report:
      - with **several**, as "which record?", which you pick on the Spins page
    - **Not in collection:** nothing matched (TV, a phone, …). These plays are kept but not counted as records, and
      the page says why.
-4. **moOde metadata on its own** also adds streamed plays the microphone missed. Radio time is counted per station
-   even when no song is known.
+4. **The player's song info on its own** also adds plays the microphone missed. Radio time is counted per station
+   even when no song is known. (Plays from the old moOde players show as "moOde".)
 5. **Spins:** physical plays of the same copy with less than 20 minutes between them form one "spin", the record
    being put on.
 

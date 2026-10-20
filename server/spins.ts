@@ -3,14 +3,17 @@
 // JPlaying Now units ("listeners", one per room) send raw events:
 //   mic      – the microphone recognised a song (Shazam): title, artist, album, cover, loudness
 //   mic_end  – that song is no longer heard
-//   room     – this room's moOde changed state (play/pause/stop, radio station or file, any metadata);
-//              repeated every few minutes as a heartbeat
+//   room     – this room's player changed state; repeated every few minutes as a heartbeat. From a JPlay
+//              player: play/pause/stop, the source (radio, plex, cd, spotify, bluetooth), the station and the
+//              song if known (radio songs the unit recognised from the stream included). Older units sent
+//              moOde's state (mode radio | file).
 // A worker turns them into plays a little later (so both rooms' reports are in):
 //   1. A song heard in several rooms at about the same time is ONE play.
-//   2. If a room that heard it has its moOde playing → a streamed play there (radio/file), not physical.
+//   2. If a room that heard it has its player playing → that source: a CD in the JPlay player is a physical
+//      play of your CD; radio, Plex, Spotify and Bluetooth (and moOde) are streamed plays.
 //   3. Otherwise → the highest-priority room that heard it (the lounge) and, if the song is on a record or
 //      CD you own in a format that room can play → a physical play of that copy; else "heard" (TV, phone…).
-//   4. moOde metadata adds streamed plays the mic missed; for radio the mic wins when they disagree.
+//   4. The player's own song info adds plays the mic missed; for radio the mic wins when they disagree.
 // Physical plays of the same copy in a row form a "spin" (the record being put on).
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -84,6 +87,8 @@ db.exec(`
 {
   const cols = (db.prepare('PRAGMA table_info(plays)').all() as { name: string }[]).map((c) => c.name);
   if (!cols.includes('note')) db.exec('ALTER TABLE plays ADD COLUMN note TEXT'); // why it matched (or didn't)
+  // 'player': the room's JPlay player said what it was (a CD in the player stays a CD play, whatever matching finds)
+  if (!cols.includes('via')) db.exec('ALTER TABLE plays ADD COLUMN via TEXT');
 }
 
 const SETTLE_MS = 45_000; // wait this long for the other room's report before deciding
@@ -266,6 +271,13 @@ export interface Match {
 
 const MEDIUM_LABEL: Record<string, string> = { vinyl: 'vinyl', cd: 'CD', cassette: 'cassette' };
 
+/** A CD in the room's JPlay player: always your CD; which copy, if the collection knows it. */
+const PLAYER_CD_NOTE = 'CD in the JPlay player; not found among your CDs';
+function playerCdMatch(artist: string, title: string, album: string): { match: Match | null; note: string } {
+  const m = matchCollection(artist, title, album, ['cd']);
+  return { match: m, note: m ? `${m.note} (CD in the JPlay player)` : PLAYER_CD_NOTE };
+}
+
 function wordsOf(s: string) {
   return s.split(' ').filter((w) => w.length > 1 && w !== 'and');
 }
@@ -402,16 +414,22 @@ interface Attribution {
   station: string | null;
   match: Match | null;
   note: string;
+  via?: 'player';
 }
 
 function attribute(heard: string[], ts: number, artist: string, title: string, album: string): Attribution {
   const rooms = roomInfo();
   const prio = (r: string) => rooms.get(r)?.priority ?? 0;
   const byPrio = [...new Set(heard)].sort((x, y) => prio(y) - prio(x));
-  // A room that heard it is streaming from moOde → that stream.
+  // A room that heard it has its player playing → that source.
   for (const r of byPrio) {
     const s = roomStateAt(r, ts);
-    if (s?.state === 'play') return { room: r, kind: 'streamed', detail: s.mode || 'stream', station: s.station || null, match: null, note: '' };
+    if (s?.state !== 'play') continue;
+    if (s.mode === 'cd') {
+      const { match, note } = playerCdMatch(artist, title, album);
+      return { room: r, kind: 'physical', detail: 'cd', station: null, match, note, via: 'player' };
+    }
+    return { room: r, kind: 'streamed', detail: s.mode || 'stream', station: s.station || null, match: null, note: '' };
   }
   const room = byPrio[0];
   const formats = rooms.get(room)?.formats ?? [];
@@ -440,6 +458,7 @@ interface PlayRow {
   alternatives: string;
   mic_ids: string;
   note: string | null;
+  via: string | null;
 }
 
 /* ---------- processing ---------- */
@@ -531,6 +550,10 @@ function applyRoom(room: string, ts: number, d: Record<string, unknown>) {
     key,
     ts - 15 * 60_000,
   );
+  if (mode === 'cd') {
+    playerCdPlay(room, ts, recent, { title, artist, album: String(d.album ?? ''), key });
+    return;
+  }
   if (recent) {
     // Heartbeat repeating the same song, or the microphone already logged it: just confirm.
     if (recent.confidence !== 'manual' && (recent.kind !== 'streamed' || !recent.confidence.includes('metadata'))) {
@@ -569,9 +592,47 @@ function applyRoom(room: string, ts: number, d: Record<string, unknown>) {
   );
 }
 
+/** The room's JPlay player plays a CD track: a physical play of your CD (which copy: from the collection). */
+function playerCdPlay(room: string, ts: number, recent: PlayRow | undefined, p: { title: string; artist: string; album: string; key: string }) {
+  if (recent?.confidence === 'manual') return;
+  const { match, note } = playerCdMatch(p.artist, p.title, p.album);
+  if (recent) {
+    if (recent.via === 'player' && recent.kind === 'physical') return; // heartbeat for the same track
+    // The microphone logged it first (as heard, or as another copy): it's this CD.
+    run(
+      `UPDATE plays SET kind = 'physical', detail = 'cd', station = NULL, instance_id = ?, release_id = ?, confidence = ?,
+         alternatives = ?, note = ?, via = 'player' WHERE id = ?`,
+      match?.instanceId ?? null,
+      match?.releaseId ?? null,
+      match?.confidence ?? 'metadata',
+      JSON.stringify(match?.alternatives ?? []),
+      note,
+      recent.id,
+    );
+    return;
+  }
+  endOpenMetadataPlay(room, ts);
+  run(
+    `INSERT INTO plays (room, kind, detail, started_at, title, artist, album, song_key, instance_id, release_id, confidence,
+       alternatives, note, via, created_at) VALUES (?, 'physical', 'cd', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'player', ?)`,
+    room,
+    ts,
+    p.title,
+    p.artist,
+    p.album,
+    p.key,
+    match?.instanceId ?? null,
+    match?.releaseId ?? null,
+    match?.confidence ?? 'metadata',
+    JSON.stringify(match?.alternatives ?? []),
+    note,
+    now(),
+  );
+}
+
 function endOpenMetadataPlay(room: string, ts: number) {
   run(
-    "UPDATE plays SET ended_at = ? WHERE room = ? AND confidence = 'metadata' AND ended_at IS NULL AND started_at < ? AND started_at > ?",
+    "UPDATE plays SET ended_at = ? WHERE room = ? AND (confidence = 'metadata' OR via = 'player') AND ended_at IS NULL AND started_at < ? AND started_at > ?",
     ts,
     room,
     ts,
@@ -660,18 +721,19 @@ function savePlay(
     JSON.stringify(a.match?.alternatives ?? []),
     JSON.stringify(p.micIds),
     a.note || null,
+    a.via ?? null,
   ] as const;
   if (id == null) {
     run(
       `INSERT INTO plays (room, kind, detail, station, started_at, title, artist, album, cover, song_key, instance_id, release_id,
-         confidence, heard_by, alternatives, mic_ids, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         confidence, heard_by, alternatives, mic_ids, note, via, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ...values,
       now(),
     );
   } else {
     run(
       `UPDATE plays SET room = ?, kind = ?, detail = ?, station = ?, started_at = ?, title = ?, artist = ?, album = ?, cover = ?,
-         song_key = ?, instance_id = ?, release_id = ?, confidence = ?, heard_by = ?, alternatives = ?, mic_ids = ?, note = ? WHERE id = ?`,
+         song_key = ?, instance_id = ?, release_id = ?, confidence = ?, heard_by = ?, alternatives = ?, mic_ids = ?, note = ?, via = ? WHERE id = ?`,
       ...values,
       id,
     );
@@ -868,7 +930,7 @@ export function stats(days: number) {
     streamed: { tracks: count('streamed') },
     heard: { tracks: count('heard') },
     radio: sessions.filter((s) => s.mode === 'radio').slice(0, 10).map((s) => ({ room: s.room, station: s.station || 'Radio', hours: s.hours })),
-    streamingHours: sessions.reduce((h, s) => h + s.hours, 0),
+    streamingHours: sessions.filter((s) => s.mode !== 'cd').reduce((h, s) => h + s.hours, 0),
     topArtists: all<{ artist: string; n: number }>(
       "SELECT MAX(artist) AS artist, COUNT(*) AS n FROM plays WHERE kind <> 'heard' AND artist <> '' AND started_at >= ? GROUP BY lower(artist) ORDER BY n DESC LIMIT 10",
       since,
@@ -911,17 +973,20 @@ function rematchRows(rows: PlayRow[]): number {
   tx(() => {
     for (const r of rows) {
       const formats = rooms.get(r.room)?.formats ?? [];
-      const m = matchCollection(r.artist, r.title, r.album, formats);
-      const kind = m ? 'physical' : 'heard';
-      const note = m ? m.note : whyNotOwned(r.artist, formats);
-      if (r.confidence !== 'manual' && kind === r.kind && (m?.instanceId ?? null) === r.instance_id && (m?.medium ?? '') === r.detail && note === r.note) continue;
+      const fromPlayer = r.via === 'player' && r.detail === 'cd';
+      const pc = fromPlayer ? playerCdMatch(r.artist, r.title, r.album) : null;
+      const m = pc ? pc.match : matchCollection(r.artist, r.title, r.album, formats);
+      const kind = m || pc ? 'physical' : 'heard';
+      const detail = pc ? 'cd' : (m?.medium ?? '');
+      const note = pc ? pc.note : m ? m.note : whyNotOwned(r.artist, formats);
+      if (r.confidence !== 'manual' && kind === r.kind && (m?.instanceId ?? null) === r.instance_id && detail === r.detail && note === r.note) continue;
       run(
         'UPDATE plays SET kind = ?, detail = ?, instance_id = ?, release_id = ?, confidence = ?, alternatives = ?, note = ? WHERE id = ?',
         kind,
-        m?.medium ?? '',
+        detail,
         m?.instanceId ?? null,
         m?.releaseId ?? null,
-        m?.confidence ?? 'mic',
+        m?.confidence ?? (pc ? 'metadata' : 'mic'),
         JSON.stringify(m?.alternatives ?? []),
         note,
         r.id,

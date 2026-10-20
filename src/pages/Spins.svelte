@@ -91,7 +91,10 @@
     loadStats();
   }
 
-  const label: Record<string, string> = { vinyl: 'Vinyl', cd: 'CD', cassette: 'Cassette', radio: 'Radio', file: 'moOde', stream: 'Stream' };
+  // Where a play came from: your records and CDs, or a source on the room's JPlay player ('file' = older moOde plays).
+  const label: Record<string, string> = {
+    vinyl: 'Vinyl', cd: 'CD', cassette: 'Cassette', radio: 'Radio', plex: 'Plex', spotify: 'Spotify', bluetooth: 'Bluetooth', file: 'moOde', stream: 'Stream',
+  };
   const badge = (p: { kind: string; detail: string }) => (p.kind === 'heard' ? 'Not in collection' : label[p.detail] ?? p.detail ?? p.kind);
   const time = (t: number) => {
     const d = new Date(t);
@@ -142,7 +145,7 @@
             </button>
           {:else if r.session}
             <div class="quiet">
-              {r.session.mode === 'radio' ? 'Radio' : 'moOde'}{r.session.station ? ` · ${r.session.station}` : ''}
+              {label[r.session.mode] ?? 'Player'}{r.session.station ? ` · ${r.session.station}` : ''}
               <span class="muted">since {time(r.session.startedAt)}</span>
             </div>
           {:else}
@@ -190,7 +193,7 @@
       {:else}
         <p class="muted count">
           {total.toLocaleString('sv-SE')} plays
-          {#if tab === 'heard'}· songs the microphone recognised that didn't come from moOde and that aren't on a record or CD you own (TV, a phone…).{/if}
+          {#if tab === 'heard'}· songs the microphone recognised that didn't come from a player and that aren't on a record or CD you own (TV, a phone…).{/if}
           {#if session.isAdmin}<button class="btn small ghost" onclick={matchAgain}>Match again</button> {rematchMsg}{/if}
         </p>
         <ul class="list">
@@ -238,7 +241,7 @@
             <div><b class="tabular">{stats.physical.spins}</b><span class="muted">records put on</span></div>
             <div><b class="tabular">{hours(stats.physical.vinylHours)}</b><span class="muted">hours of vinyl</span></div>
             <div><b class="tabular">{stats.streamed.tracks}</b><span class="muted">songs streamed</span></div>
-            <div><b class="tabular">{hours(stats.streamingHours)}</b><span class="muted">hours of moOde</span></div>
+            <div><b class="tabular">{hours(stats.streamingHours)}</b><span class="muted">hours streamed</span></div>
           </div>
           {#if stats.topRecords.length}
             <h3>Most played records</h3>
