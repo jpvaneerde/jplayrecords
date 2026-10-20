@@ -295,6 +295,31 @@ function artistSimilarity(x: string, y: string) {
 }
 
 /**
+ * The same song, even when one source spells the artist differently: radio text like
+ * "Magasinet i P3 med …, spelar nu Dua Lipa" against the microphone's "Dua Lipa".
+ */
+function sameSong(a: { artist: string; title: string }, b: { artist: string; title: string }) {
+  const t = norm(a.title);
+  if (!t || t !== norm(b.title)) return false;
+  const x = norm(a.artist);
+  const y = norm(b.artist);
+  return !x || !y || artistSimilarity(x, y) >= 2;
+}
+
+/** Of two spellings of the same artist, the clean one (the shorter, when one contains the other). */
+function cleanerArtist(x: string, y: string) {
+  if (!x) return y;
+  if (!y) return x;
+  return norm(y).length < norm(x).length && norm(x).includes(norm(y)) ? y : x;
+}
+
+/** A play of the same song around ts (any room), the closest first. */
+function similarPlay(ts: number, artist: string, title: string, windowMs: number): PlayRow | undefined {
+  const rows = all<PlayRow>('SELECT * FROM plays WHERE started_at BETWEEN ? AND ? ORDER BY ABS(started_at - ?)', ts - windowMs, ts + windowMs, ts);
+  return rows.find((r) => sameSong(r, { artist, title }));
+}
+
+/**
  * Which of your copies is this song from? Only copies in a format this room can play.
  * Rule: if you own it on a format the room plays, it's that format (vinyl before CD); otherwise null ("heard").
  *  - artist + album or track title match → that copy
@@ -476,6 +501,8 @@ function scheduleProcessing() {
 export function startSpinsWorker() {
   setInterval(processEvents, 20_000).unref();
   processEvents();
+  const merged = mergeDuplicates();
+  if (merged) console.log(`Spins: ${merged} duplicate plays merged`);
   // New records or tracklists from Discogs (and newer matching rules after an update) can explain earlier plays.
   const again = (why: string) => {
     const n = rematch();
@@ -566,6 +593,25 @@ function applyRoom(room: string, ts: number, d: Record<string, unknown>) {
     }
     return;
   }
+  // The same song already logged under another spelling (the microphone, or the other room's player): one play.
+  const similar = similarPlay(ts, artist, title, 10 * 60_000);
+  if (similar) {
+    const clean = cleanerArtist(similar.artist, artist);
+    if (similar.room === room && similar.confidence !== 'manual' && similar.kind !== 'physical') {
+      run(
+        "UPDATE plays SET kind = 'streamed', detail = ?, station = ?, instance_id = NULL, release_id = NULL, confidence = ?, artist = ?, song_key = ? WHERE id = ?",
+        mode,
+        station || null,
+        similar.confidence.includes('mic') ? 'mic+metadata' : similar.confidence,
+        clean,
+        songKey(clean, similar.title),
+        similar.id,
+      );
+    } else if (clean !== similar.artist && similar.confidence !== 'manual') {
+      run('UPDATE plays SET artist = ?, song_key = ? WHERE id = ?', clean, songKey(clean, similar.title), similar.id);
+    }
+    return;
+  }
   if (mode === 'radio') {
     // The microphone heard something else on this radio at the same moment: it is right, the metadata isn't.
     const micPlay = get<{ id: number }>(
@@ -647,14 +693,21 @@ function applyMic(eventId: string, room: string, ts: number, d: Record<string, u
   const key = songKey(artist, title);
   if (!key) return;
 
-  // The same song reported by another room (or again): one play.
-  const existing = get<PlayRow>(
-    'SELECT * FROM plays WHERE song_key = ? AND started_at BETWEEN ? AND ? ORDER BY ABS(started_at - ?) LIMIT 1',
-    key,
-    ts - SAME_SONG_MS,
-    ts + SAME_SONG_MS,
-    ts,
-  );
+  // The same song reported by another room (or again, or by the radio's text under another spelling): one play.
+  const existing =
+    get<PlayRow>(
+      'SELECT * FROM plays WHERE song_key = ? AND started_at BETWEEN ? AND ? ORDER BY ABS(started_at - ?) LIMIT 1',
+      key,
+      ts - SAME_SONG_MS,
+      ts + SAME_SONG_MS,
+      ts,
+    ) ?? similarPlay(ts, artist, title, 10 * 60_000);
+  if (existing && existing.artist !== artist && cleanerArtist(existing.artist, artist) === artist && existing.confidence !== 'manual') {
+    // The microphone's (Shazam's) artist is the clean one.
+    run('UPDATE plays SET artist = ?, song_key = ? WHERE id = ?', artist, key, existing.id);
+    existing.artist = artist;
+    existing.song_key = key;
+  }
   if (existing) {
     const heard = [...new Set([...(JSON.parse(existing.heard_by) as string[]), room])];
     const micIds = [...(JSON.parse(existing.mic_ids) as string[]), eventId];
@@ -995,6 +1048,53 @@ function rematchRows(rows: PlayRow[]): number {
     }
   });
   return changed;
+}
+
+/**
+ * One play per song: merge plays of the same song within a few minutes of each other (the radio's text and
+ * the microphone, or both rooms) that earlier versions logged twice. Keeps the play you corrected, else the
+ * microphone's, with the clean artist name. Returns how many plays were merged away.
+ */
+export function mergeDuplicates(days = 30): number {
+  const rows = all<PlayRow>('SELECT * FROM plays WHERE started_at >= ? ORDER BY started_at', now() - days * 86_400_000);
+  const kept: PlayRow[] = [];
+  let merged = 0;
+  const rank = (r: PlayRow) => (r.confidence === 'manual' ? 3 : r.kind === 'physical' ? 2 : r.confidence.includes('mic') ? 1 : 0);
+  tx(() => {
+    for (const r of rows) {
+      const twin = kept.find((k) => Math.abs(k.started_at - r.started_at) <= 10 * 60_000 && sameSong(k, r));
+      if (!twin) {
+        kept.push(r);
+        continue;
+      }
+      if (twin.confidence === 'manual' && r.confidence === 'manual') {
+        kept.push(r);
+        continue;
+      }
+      const [keep, drop] = rank(r) > rank(twin) ? [r, twin] : [twin, r];
+      const artist = keep.confidence === 'manual' ? keep.artist : cleanerArtist(keep.artist, drop.artist);
+      const heard = [...new Set([...(JSON.parse(keep.heard_by) as string[]), ...(JSON.parse(drop.heard_by) as string[])])];
+      const micIds = [...new Set([...(JSON.parse(keep.mic_ids) as string[]), ...(JSON.parse(drop.mic_ids) as string[])])];
+      run(
+        'UPDATE plays SET artist = ?, song_key = ?, started_at = ?, ended_at = ?, heard_by = ?, mic_ids = ?, cover = COALESCE(cover, ?), station = COALESCE(station, ?) WHERE id = ?',
+        artist,
+        songKey(artist, keep.title),
+        Math.min(keep.started_at, drop.started_at),
+        keep.ended_at == null && drop.ended_at == null ? null : Math.max(keep.ended_at ?? 0, drop.ended_at ?? 0),
+        JSON.stringify(heard),
+        JSON.stringify(micIds),
+        drop.cover,
+        drop.station,
+        keep.id,
+      );
+      run('DELETE FROM plays WHERE id = ?', drop.id);
+      Object.assign(keep, { artist, heard_by: JSON.stringify(heard), mic_ids: JSON.stringify(micIds), started_at: Math.min(keep.started_at, drop.started_at) });
+      const i = kept.indexOf(twin);
+      kept[i] = keep;
+      merged++;
+    }
+  });
+  return merged;
 }
 
 /** Undo a correction: let the matching decide again (streamed plays stay streamed). */

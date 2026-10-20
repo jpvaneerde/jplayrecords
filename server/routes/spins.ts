@@ -12,6 +12,7 @@ import {
   markHeard,
   nowPlaying,
   recentSpins,
+  mergeDuplicates,
   rematch,
   resetPlay,
   setPlayRecord,
@@ -92,7 +93,10 @@ spinsAdmin.delete('/listeners/:id', (c) => {
   return c.json({ listeners: listeners() });
 });
 
-spinsAdmin.post('/rematch', (c) => c.json({ changed: rematch(Number(c.req.query('days')) || 365) }));
+spinsAdmin.post('/rematch', (c) => {
+  const days = Number(c.req.query('days')) || 365;
+  return c.json({ changed: mergeDuplicates(days) + rematch(days) });
+});
 
 spinsAdmin.delete('/plays/:id', (c) => {
   deletePlay(Number(c.req.param('id')));

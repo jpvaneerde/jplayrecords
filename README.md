@@ -88,7 +88,10 @@ How a song is attributed, about 45 seconds after the last report:
      the page says why.
 4. **The player's song info on its own** also adds plays the microphone missed. Radio time is counted per station
    even when no song is known. (Plays from the old moOde players show as "moOde".)
-5. **Spins:** physical plays of the same copy with less than 20 minutes between them form one "spin", the record
+5. **One play per song:** the same song from the radio's text and from the microphone, or from both rooms, is one
+   play, also when the artist is spelled differently (radio text like "Magasinet i P3 med …, spelar nu Dua Lipa"
+   against "Dua Lipa"); the clean name is kept. **Match again** also merges such duplicates from before.
+6. **Spins:** physical plays of the same copy with less than 20 minutes between them form one "spin", the record
    being put on.
 
 Listeners are created under **Settings → Listeners**: room, priority, formats, and a token for the unit's
