@@ -5,7 +5,7 @@
 // An answer: { found, instrumental, synced: [[seconds, line], ...] | null, plain: [line, ...] | null, offset }
 // offset (seconds) is added to the song's position before choosing the line: + shows lines later, - earlier.
 
-import { db, get, now, run } from './db.ts';
+import { db, get, getSetting, now, run, setSetting } from './db.ts';
 import { USER_AGENT } from './config.ts';
 
 db.exec(`
@@ -27,6 +27,13 @@ db.exec(`
     last_asked_at INTEGER
   );
 `);
+
+// Raised whenever the matching gets better: songs not found with an older version are looked up again.
+const MATCHER_VERSION = 3;
+if (getSetting<number>('lyricsMatcher', 0) < MATCHER_VERSION) {
+  db.exec("DELETE FROM lyrics WHERE found = 0 AND source <> 'manual'");
+  setSetting('lyricsMatcher', MATCHER_VERSION);
+}
 
 const API = 'https://lrclib.net/api';
 const RETRY_MISS_MS = 3 * 86_400_000; // a song without lyrics is looked up again after 3 days
@@ -70,6 +77,16 @@ export function mainArtist(artist: string): string {
 
 export function lyricsKey(artist: string, title: string) {
   return `${normText(mainArtist(artist))}|${normText(title)}`;
+}
+
+/**
+ * How to search for a title: as it is, without '(Remastered)' and the like, and without punctuation
+ * (LRCLIB's search matches whole words, so 'CHANEL$' wouldn't find 'CHANEL').
+ */
+export function titleVariants(title: string): string[] {
+  const plain = title.replace(/\s*[([].*?[)\]]/g, '').trim();
+  const bare = plain.replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  return [...new Set([title, plain, bare])].filter(Boolean);
 }
 
 /** '[01:02.50] Line' (a line may carry several times) -> [[62.5, 'Line'], ...], in time order. */
@@ -160,7 +177,7 @@ export async function fetchLrclib(artist: string, title: string, album: string, 
     } else if (r.status !== 404) throw new Error(`LRCLIB answered ${r.status}`);
   }
   // 2. Search by title and artist and take the best fit (also without "(Remastered)" and the like).
-  const titles = [...new Set([title, title.replace(/\s*[([].*?[)\]]/g, '').trim()])].filter(Boolean);
+  const titles = titleVariants(title);
   for (const t of titles) {
     const r = await get_(`${API}/search?${new URLSearchParams({ track_name: t, artist_name: mainArtist(artist) })}`);
     if (r.status === 404) continue;
@@ -173,10 +190,11 @@ export async function fetchLrclib(artist: string, title: string, album: string, 
     }
     if (best) return { ans: toAnswer(best), id: best.id ?? null };
   }
-  // 3. The title is written differently on LRCLIB (Japanese script vs romaji or English...): all songs by this
-  //    artist (and on this album), and the one with the same length.
-  if (duration) {
-    const queries = [...new Set([`${mainArtist(artist)} ${album}`.trim(), mainArtist(artist)])].filter(Boolean);
+  // 3. A free search: artist and title, artist and album, the artist alone. Take a result with the same title,
+  //    or (for a title written differently: Japanese script vs romaji or English) the same length.
+  {
+    const a = mainArtist(artist);
+    const queries = [...new Set([`${a} ${titles[titles.length - 1]}`, album ? `${a} ${album}` : '', a])].filter(Boolean);
     for (const q of queries) {
       const r = await get_(`${API}/search?${new URLSearchParams({ q })}`);
       if (r.status === 404) continue;
@@ -184,7 +202,7 @@ export async function fetchLrclib(artist: string, title: string, album: string, 
       let best: LrclibRecord | null = null;
       let bestScore = -Infinity;
       for (const rec of ((await r.json()) as LrclibRecord[]) ?? []) {
-        const s = scoreByLength(rec, artist, album, duration);
+        const s = score(rec, artist, title, duration) ?? scoreByLength(rec, artist, album, duration);
         if (s !== null && s > bestScore) [best, bestScore] = [rec, s];
       }
       if (best) return { ans: toAnswer(best), id: best.id ?? null };
