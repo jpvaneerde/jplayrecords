@@ -4,6 +4,7 @@ import { access, newDevice, requireAdmin, requireViewer, type Env } from '../aut
 import { DISCOGS_TOKEN, JPLAY_API, JPLAY_LOGIN_URL, PUBLIC_URL, SYNC_TIME, TZ } from '../config.ts';
 import { all, get, getSetting, run, setSetting, YEAR, type ItemRow } from '../db.ts';
 import { playedStats } from '../spins.ts';
+import { lyricsStats } from '../lyrics.ts';
 import { coverFiles, customFields, fetchRelease, releaseDetails, startSync, syncStatus } from '../discogs.ts';
 import {
   compartmentMembers,
@@ -274,6 +275,7 @@ admin.get('/', (c) =>
     grids: grids(),
     devices: devices(),
     display: display(),
+    lyrics: lyricsStats(),
   }),
 );
 

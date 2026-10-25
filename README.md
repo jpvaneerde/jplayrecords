@@ -102,6 +102,15 @@ suggestions and a search of your collection. From there you can pick the copy, m
 or press **Match automatically** to undo a correction. After every Discogs sync, and on start, plays that weren't
 matched or weren't certain are matched again. **Match again** does the same on demand.
 
+## Lyrics for the JPlaying Now units
+
+The units show lyrics under the song. They ask here first (`GET /api/lyrics?artist=&title=&album=&duration=`, with
+their listener token): a song nobody asked for before is looked up on LRCLIB (lrclib.net) and kept in the `lyrics`
+table, found or not (misses are looked up again after 3 days). So each song is fetched once for the whole house,
+and both units get the same answer. Each song has an `offset` (seconds) for its timing, which the units apply; a
+screen to correct timing, pick another version or paste lyrics comes later. Settings → Listeners shows how many
+songs are stored. When this server can't be reached, the units use their own copy or ask LRCLIB directly.
+
 ## Run it locally
 
 ```sh

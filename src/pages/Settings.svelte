@@ -331,6 +331,12 @@
         <button class="btn primary" onclick={addListener}>Add listener</button>
       </div>
       {#if listenerMsg}<p class="muted">{listenerMsg}</p>{/if}
+      {#if st.lyrics?.songs}
+        <p class="muted small">
+          Lyrics: {st.lyrics.songs} songs looked up for the units, {st.lyrics.found} with lyrics ({st.lyrics.synced} timed).
+          Kept here so each song is looked up once for the whole house.
+        </p>
+      {/if}
       {#if listenerToken}
         <p class="notice ok">
           Token for this unit (shown only once). Paste it in the unit's JPlaying Now settings under <b>Spins</b>, with the address

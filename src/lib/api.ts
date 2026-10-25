@@ -185,6 +185,7 @@ export interface AdminState {
   grids: Grid[];
   devices: Device[];
   display: Display;
+  lyrics: { songs: number; found: number; synced: number };
 }
 
 /* ---------- Spins ---------- */

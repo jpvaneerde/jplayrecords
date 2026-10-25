@@ -11,6 +11,7 @@ import { linkDevice, requireViewer, type Env } from './auth.ts';
 import { admin, records, session } from './routes/api.ts';
 import { scheduleNightly, startSync } from './discogs.ts';
 import { spins, spinsAdmin, spinsIngest } from './routes/spins.ts';
+import { lyricsApi } from './routes/lyrics.ts';
 import { startSpinsWorker } from './spins.ts';
 
 const app = new Hono<Env>();
@@ -43,6 +44,7 @@ app.route('/api/spins/events', spinsIngest);
 app.route('/api/spins', spins);
 app.route('/api/admin/spins', spinsAdmin);
 app.route('/api/admin', admin);
+app.route('/api/lyrics', lyricsApi);
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
 
 // Device link: signs a kiosk screen in (read-only) and opens the collection.
