@@ -18,5 +18,8 @@ lyricsApi.use('*', async (c, next) => {
 lyricsApi.get('/', async (c) => {
   const q = (k: string) => c.req.query(k) ?? '';
   const duration = Number(q('duration'));
-  return c.json(await lookupLyrics(q('artist'), q('title'), q('album'), Number.isFinite(duration) && duration > 0 ? duration : null));
+  const ans = await lookupLyrics(q('artist'), q('title'), q('album'), Number.isFinite(duration) && duration > 0 ? duration : null);
+  // LRCLIB couldn't be reached from here: say so (502), so a unit asks LRCLIB itself instead of trusting a "not found"
+  if (ans.unavailable) return c.json({ error: 'LRCLIB could not be reached from JPlay Records.' }, 502);
+  return c.json(ans);
 });

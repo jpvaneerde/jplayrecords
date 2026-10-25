@@ -29,7 +29,7 @@ db.exec(`
 `);
 
 // Raised whenever the matching gets better: songs not found with an older version are looked up again.
-const MATCHER_VERSION = 3;
+const MATCHER_VERSION = 6;
 if (getSetting<number>('lyricsMatcher', 0) < MATCHER_VERSION) {
   db.exec("DELETE FROM lyrics WHERE found = 0 AND source <> 'manual'");
   setSetting('lyricsMatcher', MATCHER_VERSION);
@@ -37,7 +37,7 @@ if (getSetting<number>('lyricsMatcher', 0) < MATCHER_VERSION) {
 
 const API = 'https://lrclib.net/api';
 const RETRY_MISS_MS = 3 * 86_400_000; // a song without lyrics is looked up again after 3 days
-const RETRY_ERROR_MS = 15 * 60_000; // LRCLIB unreachable: not again for this song for 15 minutes
+const RETRY_ERROR_MS = 45_000; // LRCLIB busy or unreachable: not again for this song for 45 seconds
 const DURATION_SLACK = 4; // seconds: the same recording when the lengths differ by at most this
 
 export interface LyricsAnswer {
@@ -46,6 +46,8 @@ export interface LyricsAnswer {
   synced: [number, string][] | null;
   plain: string[] | null;
   offset: number;
+  /** LRCLIB couldn't be asked (and nothing is stored): not a real "not found". The units then ask LRCLIB themselves. */
+  unavailable?: boolean;
 }
 const NOT_FOUND: LyricsAnswer = { found: false, instrumental: false, synced: null, plain: null, offset: 0 };
 
@@ -128,7 +130,7 @@ function toAnswer(rec: LrclibRecord): LyricsAnswer {
  * (or album) and the same length to within 2 seconds. null = not this song.
  */
 export function scoreByLength(rec: LrclibRecord, artist: string, album: string, duration: number | null): number | null {
-  if (!duration || !rec.duration) return null;
+  if (!duration || !rec.duration || (!rec.syncedLyrics && !rec.plainLyrics)) return null;
   const diff = Math.abs(rec.duration - duration);
   if (diff > 2) return null;
   const want = normText(mainArtist(artist));
@@ -145,6 +147,7 @@ export function scoreByLength(rec: LrclibRecord, artist: string, album: string, 
 
 /** How well an LRCLIB entry fits the song; null = not this song. */
 export function score(rec: LrclibRecord, artist: string, title: string, duration: number | null): number | null {
+  if (!rec.syncedLyrics && !rec.plainLyrics) return null; // no lyrics in it: never the answer
   if (normText(rec.trackName) !== normText(title)) return null;
   const want = normText(mainArtist(artist));
   const have = normText(rec.artistName);
@@ -164,51 +167,75 @@ export function score(rec: LrclibRecord, artist: string, title: string, duration
 type Getter = (url: string) => Promise<{ status: number; json: () => Promise<unknown> }>;
 const httpGet: Getter = (url) => fetch(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
 
-/** Ask LRCLIB (no cache). */
+let retryPause = 1500; // ms between the two tries of a request (tests set it to 0)
+export function setRetryPause(ms: number) {
+  retryPause = ms;
+}
+
+/** One LRCLIB request, tried twice. 404 -> null; a failure (503 when LRCLIB is busy, timeouts, odd answers) is
+ *  noted in problems and also gives null, so the lookup can carry on with its other ways of searching. */
+async function ask(get_: Getter, path: string, problems: string[], expectList: boolean): Promise<unknown> {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const r = await get_(`${API}/${path}`);
+      if (r.status === 404) return null;
+      if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      if (expectList && !Array.isArray(data)) throw new Error(`unexpected answer: ${JSON.stringify(data).slice(0, 100)}`);
+      return data;
+    } catch (e) {
+      if (attempt === 2) {
+        problems.push(`${path.split('?')[0]}: ${(e as Error).message}`);
+        return null;
+      }
+      await new Promise((res) => setTimeout(res, retryPause));
+    }
+  }
+  return null;
+}
+
+/** Ask LRCLIB (no cache). Throws when nothing was found and some requests failed (that isn't "no lyrics"). */
 export async function fetchLrclib(artist: string, title: string, album: string, duration: number | null, get_: Getter = httpGet) {
+  let instrumental = false;
+  const problems: string[] = [];
+  const pick = (recs: LrclibRecord[], byLength: boolean) => {
+    let best: LrclibRecord | null = null;
+    let bestScore = -Infinity;
+    for (const rec of recs) {
+      const s = score(rec, artist, title, duration) ?? (byLength ? scoreByLength(rec, artist, album, duration) : null);
+      if (s !== null && s > bestScore) [best, bestScore] = [rec, s];
+    }
+    return best;
+  };
   // 1. The exact recording, when album and length are known.
   if (duration && album) {
     const q = new URLSearchParams({ artist_name: artist, track_name: title, album_name: album, duration: String(Math.round(duration)) });
-    const r = await get_(`${API}/get?${q}`);
-    if (r.status === 200) {
-      const rec = (await r.json()) as LrclibRecord;
+    const rec = (await ask(get_, `get?${q}`, problems, false)) as LrclibRecord | null;
+    if (rec) {
       const ans = toAnswer(rec);
-      if (ans.found || ans.instrumental) return { ans, id: rec.id ?? null };
-    } else if (r.status !== 404) throw new Error(`LRCLIB answered ${r.status}`);
+      if (ans.found) return { ans, id: rec.id ?? null };
+      // An entry without lyrics (marked instrumental, or empty): look further, another entry may have them.
+      instrumental = ans.instrumental;
+    }
   }
   // 2. Search by title and artist and take the best fit (also without "(Remastered)" and the like).
   const titles = titleVariants(title);
   for (const t of titles) {
-    const r = await get_(`${API}/search?${new URLSearchParams({ track_name: t, artist_name: mainArtist(artist) })}`);
-    if (r.status === 404) continue;
-    if (r.status !== 200) throw new Error(`LRCLIB answered ${r.status}`);
-    let best: LrclibRecord | null = null;
-    let bestScore = -Infinity;
-    for (const rec of ((await r.json()) as LrclibRecord[]) ?? []) {
-      const s = score(rec, artist, title, duration);
-      if (s !== null && s > bestScore) [best, bestScore] = [rec, s];
-    }
+    const recs = (await ask(get_, `search?${new URLSearchParams({ track_name: t, artist_name: mainArtist(artist) })}`, problems, true)) as LrclibRecord[] | null;
+    const best = pick(recs ?? [], false);
     if (best) return { ans: toAnswer(best), id: best.id ?? null };
   }
   // 3. A free search: artist and title, artist and album, the artist alone. Take a result with the same title,
   //    or (for a title written differently: Japanese script vs romaji or English) the same length.
-  {
-    const a = mainArtist(artist);
-    const queries = [...new Set([`${a} ${titles[titles.length - 1]}`, album ? `${a} ${album}` : '', a])].filter(Boolean);
-    for (const q of queries) {
-      const r = await get_(`${API}/search?${new URLSearchParams({ q })}`);
-      if (r.status === 404) continue;
-      if (r.status !== 200) throw new Error(`LRCLIB answered ${r.status}`);
-      let best: LrclibRecord | null = null;
-      let bestScore = -Infinity;
-      for (const rec of ((await r.json()) as LrclibRecord[]) ?? []) {
-        const s = score(rec, artist, title, duration) ?? scoreByLength(rec, artist, album, duration);
-        if (s !== null && s > bestScore) [best, bestScore] = [rec, s];
-      }
-      if (best) return { ans: toAnswer(best), id: best.id ?? null };
-    }
+  const a = mainArtist(artist);
+  const queries = [...new Set([`${a} ${titles[titles.length - 1]}`, album ? `${a} ${album}` : '', a])].filter(Boolean);
+  for (const q of queries) {
+    const recs = (await ask(get_, `search?${new URLSearchParams({ q })}`, problems, true)) as LrclibRecord[] | null;
+    const best = pick(recs ?? [], true);
+    if (best) return { ans: toAnswer(best), id: best.id ?? null };
   }
-  return { ans: { ...NOT_FOUND }, id: null };
+  if (problems.length) throw new Error(problems.slice(0, 3).join('; '));
+  return { ans: { ...NOT_FOUND, instrumental }, id: null };
 }
 
 /* ---------- the store ---------- */
@@ -246,7 +273,7 @@ export async function lookupLyrics(artist: string, title: string, album = '', du
   run('UPDATE lyrics SET asked_count = asked_count + 1, last_asked_at = ? WHERE key = ?', now(), key);
   const row = get<LyricsRow>('SELECT * FROM lyrics WHERE key = ?', key);
   if (row && (row.found || row.source === 'manual' || now() - row.fetched_at < RETRY_MISS_MS)) return rowAnswer(row);
-  if (now() - (failedAt.get(key) ?? 0) < RETRY_ERROR_MS) return row ? rowAnswer(row) : { ...NOT_FOUND };
+  if (now() - (failedAt.get(key) ?? 0) < RETRY_ERROR_MS) return row ? rowAnswer(row) : { ...NOT_FOUND, unavailable: true };
 
   const pending = inFlight.get(key);
   if (pending) {
@@ -284,7 +311,7 @@ export async function lookupLyrics(artist: string, title: string, album = '', du
       console.warn(`Lyrics: LRCLIB lookup failed for ${artist} – ${title}: ${(e as Error).message}`);
       failedAt.set(key, now());
       if (failedAt.size > 2000) failedAt.delete(failedAt.keys().next().value!);
-      return row ? rowAnswer(row) : { ...NOT_FOUND };
+      return row ? rowAnswer(row) : { ...NOT_FOUND, unavailable: true };
     } finally {
       inFlight.delete(key);
     }
