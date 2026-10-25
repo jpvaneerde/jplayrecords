@@ -44,16 +44,21 @@ const NOT_FOUND: LyricsAnswer = { found: false, instrumental: false, synced: nul
 
 /* ---------- matching (the same rules as JPlaying Now's lyrics.py) ---------- */
 
-/** 'Purple Rain (2015 Remaster)' -> 'purple rain'; accents, brackets and punctuation ignored. */
+/**
+ * 'Purple Rain (2015 Remaster)' -> 'purple rain', 'Björk' -> 'bjork', '分かってないよ' stays.
+ * Accents on Latin letters, brackets and punctuation are ignored; letters of every script are kept, and
+ * full-width characters become ordinary ones ('ＴＥＳＴ（Live）' = 'TEST (Live)').
+ */
 export function normText(s: unknown): string {
   return String(s ?? '')
     .normalize('NFKD')
-    .replace(/[^\x00-\x7f]/g, '')
+    .replace(/([\u0000-\u024f])\p{M}+/gu, '$1') // an accent on a Latin letter: drop it
+    .normalize('NFC') // が, 방 etc. put back together
     .toLowerCase()
     .replace(/\(.*?\)|\[.*?\]/g, ' ')
     .replace(/\s+-\s+.*$/, '')
     .replace(/\b(feat|ft|featuring)\b.*$/, '')
-    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
 }
 
@@ -99,6 +104,26 @@ function toAnswer(rec: LrclibRecord): LyricsAnswer {
   if (plain.length === 1 && !plain[0]) plain = [];
   if (!plain.length && synced.length) plain = synced.map(([, l]) => l);
   return { found: !!(synced.length || plain.length), instrumental: !!rec.instrumental, synced: synced.length ? synced : null, plain: plain.length ? plain : null, offset: 0 };
+}
+
+/**
+ * For a song whose title is written differently (Japanese script vs romaji or English): the same artist
+ * (or album) and the same length to within 2 seconds. null = not this song.
+ */
+export function scoreByLength(rec: LrclibRecord, artist: string, album: string, duration: number | null): number | null {
+  if (!duration || !rec.duration) return null;
+  const diff = Math.abs(rec.duration - duration);
+  if (diff > 2) return null;
+  const want = normText(mainArtist(artist));
+  const have = normText(rec.artistName);
+  const sameArtist = !!want && (have.includes(want) || want.includes(have));
+  const sameAlbum = !!normText(album) && normText(album) === normText(rec.albumName);
+  if (!sameArtist && !sameAlbum) return null;
+  let s = -diff * 3;
+  if (rec.syncedLyrics) s += 10;
+  else if (rec.plainLyrics) s += 3;
+  if (rec.instrumental) s -= 5;
+  return s;
 }
 
 /** How well an LRCLIB entry fits the song; null = not this song. */
@@ -147,6 +172,23 @@ export async function fetchLrclib(artist: string, title: string, album: string, 
       if (s !== null && s > bestScore) [best, bestScore] = [rec, s];
     }
     if (best) return { ans: toAnswer(best), id: best.id ?? null };
+  }
+  // 3. The title is written differently on LRCLIB (Japanese script vs romaji or English...): all songs by this
+  //    artist (and on this album), and the one with the same length.
+  if (duration) {
+    const queries = [...new Set([`${mainArtist(artist)} ${album}`.trim(), mainArtist(artist)])].filter(Boolean);
+    for (const q of queries) {
+      const r = await get_(`${API}/search?${new URLSearchParams({ q })}`);
+      if (r.status === 404) continue;
+      if (r.status !== 200) throw new Error(`LRCLIB answered ${r.status}`);
+      let best: LrclibRecord | null = null;
+      let bestScore = -Infinity;
+      for (const rec of ((await r.json()) as LrclibRecord[]) ?? []) {
+        const s = scoreByLength(rec, artist, album, duration);
+        if (s !== null && s > bestScore) [best, bestScore] = [rec, s];
+      }
+      if (best) return { ans: toAnswer(best), id: best.id ?? null };
+    }
   }
   return { ans: { ...NOT_FOUND }, id: null };
 }
