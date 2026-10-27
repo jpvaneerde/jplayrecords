@@ -89,6 +89,9 @@ db.exec(`
   if (!cols.includes('note')) db.exec('ALTER TABLE plays ADD COLUMN note TEXT'); // why it matched (or didn't)
   // 'player': the room's JPlay player said what it was (a CD in the player stays a CD play, whatever matching finds)
   if (!cols.includes('via')) db.exec('ALTER TABLE plays ADD COLUMN via TEXT');
+  // 'hub:id': a play the JPlay hub decided and sent here (the hub keeps it up to date; see hubPlays)
+  if (!cols.includes('hub_id')) db.exec('ALTER TABLE plays ADD COLUMN hub_id TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS plays_hub ON plays (hub_id) WHERE hub_id IS NOT NULL');
 }
 
 const SETTLE_MS = 45_000; // wait this long for the other room's report before deciding
@@ -1013,7 +1016,7 @@ export function markHeard(id: number) {
  */
 export function rematch(days = 90): number {
   const rows = all<PlayRow>(
-    `SELECT * FROM plays WHERE started_at >= ? AND confidence <> 'manual'
+    `SELECT * FROM plays WHERE started_at >= ? AND confidence <> 'manual' AND hub_id IS NULL
        AND (kind = 'heard' OR (kind = 'physical' AND (instance_id IS NULL OR confidence IN ('likely', 'ambiguous'))))`,
     now() - days * 86_400_000,
   );
@@ -1056,7 +1059,7 @@ function rematchRows(rows: PlayRow[]): number {
  * microphone's, with the clean artist name. Returns how many plays were merged away.
  */
 export function mergeDuplicates(days = 30): number {
-  const rows = all<PlayRow>('SELECT * FROM plays WHERE started_at >= ? ORDER BY started_at', now() - days * 86_400_000);
+  const rows = all<PlayRow>('SELECT * FROM plays WHERE started_at >= ? AND hub_id IS NULL ORDER BY started_at', now() - days * 86_400_000);
   const kept: PlayRow[] = [];
   let merged = 0;
   const rank = (r: PlayRow) => (r.confidence === 'manual' ? 3 : r.kind === 'physical' ? 2 : r.confidence.includes('mic') ? 1 : 0);
@@ -1176,4 +1179,69 @@ export function exportForHub(part: string, after: string, limit: number) {
     return { lyrics: all('SELECT * FROM lyrics WHERE key > ? ORDER BY key LIMIT ?', after || '', limit) };
   }
   return { error: 'part: rooms, plays or lyrics' };
+}
+
+/**
+ * Plays from the JPlay hub, which decides them now: new ones are added, changed ones updated (by hub_id, or by
+ * records_id for a play the hub once imported from here), deleted ones removed. Only your copy's id comes along;
+ * the record itself is looked up here as for any play.
+ */
+export function hubPlays(
+  plays: Record<string, unknown>[],
+  deleted: { hub_id?: unknown; records_id?: unknown }[],
+): { saved: number; deleted: number } {
+  const str = (v: unknown) => (v == null ? null : String(v));
+  const int = (v: unknown) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Math.round(Number(v)));
+  const ownCopy = (v: unknown) => {
+    const id = int(v);
+    return id != null && get<{ n: number }>('SELECT 1 AS n FROM items WHERE instance_id = ?', id) ? id : null;
+  };
+  let saved = 0;
+  let removed = 0;
+  tx(() => {
+    for (const d of deleted.slice(0, 2000)) {
+      const rid = int(d.records_id);
+      const r = rid != null ? run('DELETE FROM plays WHERE id = ?', rid) : run('DELETE FROM plays WHERE hub_id = ?', String(d.hub_id ?? ''));
+      removed += Number(r.changes);
+    }
+    for (const p of plays.slice(0, 1000)) {
+      const hubId = String(p.hub_id ?? '').slice(0, 80);
+      const title = String(p.title ?? '').trim();
+      const kind = String(p.kind ?? '');
+      const started = int(p.started_at);
+      if (!hubId || !title || !['physical', 'streamed', 'heard'].includes(kind) || started == null) continue;
+      const instance = ownCopy(p.instance_id);
+      const alternatives = (Array.isArray(p.alternatives) ? p.alternatives : []).map(int).filter((x): x is number => x != null);
+      const values = [
+        String(p.room ?? '').slice(0, 40) || 'Hub', kind, String(p.detail ?? ''), str(p.station), started, int(p.ended_at),
+        title, String(p.artist ?? ''), String(p.album ?? ''), str(p.cover), songKey(p.artist, title) || title.toLowerCase(),
+        instance, instance != null ? int(p.release_id) : null, String(p.confidence ?? 'mic'),
+        JSON.stringify(Array.isArray(p.heard_by) ? p.heard_by.map(String) : []), JSON.stringify(alternatives),
+        str(p.note), str(p.via),
+      ] as const;
+      const rid = int(p.records_id);
+      const target = rid != null ? get<{ id: number }>('SELECT id FROM plays WHERE id = ?', rid) : get<{ id: number }>('SELECT id FROM plays WHERE hub_id = ?', hubId);
+      if (target) {
+        run(
+          `UPDATE plays SET room = ?, kind = ?, detail = ?, station = ?, started_at = ?, ended_at = ?, title = ?, artist = ?, album = ?,
+             cover = ?, song_key = ?, instance_id = ?, release_id = ?, confidence = ?, heard_by = ?, alternatives = ?, note = ?, via = ?,
+             hub_id = ? WHERE id = ?`,
+          ...values,
+          hubId,
+          target.id,
+        );
+      } else {
+        run(
+          `INSERT INTO plays (room, kind, detail, station, started_at, ended_at, title, artist, album, cover, song_key, instance_id,
+             release_id, confidence, heard_by, alternatives, note, via, hub_id, mic_ids, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)`,
+          ...values,
+          hubId,
+          now(),
+        );
+      }
+      saved++;
+    }
+  });
+  return { saved, deleted: removed };
 }

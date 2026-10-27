@@ -10,7 +10,7 @@ import { COVER_DIR, getSetting } from './db.ts';
 import { linkDevice, requireViewer, type Env } from './auth.ts';
 import { admin, records, session } from './routes/api.ts';
 import { scheduleNightly, startSync } from './discogs.ts';
-import { spins, spinsAdmin, spinsExport, spinsIngest, spinsMatch } from './routes/spins.ts';
+import { spins, spinsAdmin, spinsExport, spinsFromHub, spinsIngest, spinsMatch } from './routes/spins.ts';
 import { lyricsApi } from './routes/lyrics.ts';
 import { listenerByToken, startSpinsWorker } from './spins.ts';
 
@@ -43,6 +43,7 @@ app.route('/api/records', records);
 app.route('/api/spins/events', spinsIngest);
 app.route('/api/spins/match', spinsMatch); // the JPlay hub (listener token)
 app.route('/api/spins/export', spinsExport);
+app.route('/api/spins/hub-plays', spinsFromHub);
 app.route('/api/spins', spins);
 app.route('/api/admin/spins', spinsAdmin);
 app.route('/api/admin', admin);

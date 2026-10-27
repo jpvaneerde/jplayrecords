@@ -6,6 +6,7 @@ import {
   deleteListener,
   deletePlay,
   exportForHub,
+  hubPlays,
   ingest,
   listenerByToken,
   listeners,
@@ -52,6 +53,14 @@ spinsMatch.post('/', async (c) => {
   const b = await c.req.json<{ songs?: unknown[] }>();
   if (!Array.isArray(b.songs)) throw bad('Send {"songs": [...]}.');
   return c.json({ results: matchForHub(b.songs as never[]) });
+});
+
+export const spinsFromHub = new Hono();
+spinsFromHub.use('*', listenerOnly);
+spinsFromHub.post('/', async (c) => {
+  const b = await c.req.json<{ plays?: unknown[]; deleted?: unknown[] }>();
+  if (!Array.isArray(b.plays)) throw bad('Send {"plays": [...], "deleted": [...]}.');
+  return c.json(hubPlays(b.plays as never[], (Array.isArray(b.deleted) ? b.deleted : []) as never[]));
 });
 
 export const spinsExport = new Hono();
