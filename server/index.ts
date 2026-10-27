@@ -10,9 +10,9 @@ import { COVER_DIR, getSetting } from './db.ts';
 import { linkDevice, requireViewer, type Env } from './auth.ts';
 import { admin, records, session } from './routes/api.ts';
 import { scheduleNightly, startSync } from './discogs.ts';
-import { spins, spinsAdmin, spinsIngest } from './routes/spins.ts';
+import { spins, spinsAdmin, spinsExport, spinsIngest, spinsMatch } from './routes/spins.ts';
 import { lyricsApi } from './routes/lyrics.ts';
-import { startSpinsWorker } from './spins.ts';
+import { listenerByToken, startSpinsWorker } from './spins.ts';
 
 const app = new Hono<Env>();
 
@@ -41,6 +41,8 @@ app.use('/api/*', async (c, next) => {
 app.route('/api/session', session);
 app.route('/api/records', records);
 app.route('/api/spins/events', spinsIngest);
+app.route('/api/spins/match', spinsMatch); // the JPlay hub (listener token)
+app.route('/api/spins/export', spinsExport);
 app.route('/api/spins', spins);
 app.route('/api/admin/spins', spinsAdmin);
 app.route('/api/admin', admin);
@@ -55,8 +57,12 @@ app.get('/d/:token', (c) => {
   return c.redirect('/?kiosk=1');
 });
 
-// Cached covers (named after the Discogs release id).
-app.use('/covers/*', requireViewer);
+// Cached covers (named after the Discogs release id). The JPlay hub fetches them with a listener token.
+app.use('/covers/*', async (c, next) => {
+  const token = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
+  if (token && listenerByToken(token)) return next();
+  return requireViewer(c, next);
+});
 app.use(
   '/covers/*',
   serveStatic({

@@ -1,15 +1,17 @@
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { requireAdmin, requireViewer, type Env } from '../auth.ts';
 import {
   createListener,
   deleteListener,
   deletePlay,
+  exportForHub,
   ingest,
   listenerByToken,
   listeners,
   listPlays,
   markHeard,
+  matchForHub,
   nowPlaying,
   recentSpins,
   mergeDuplicates,
@@ -35,6 +37,28 @@ spinsIngest.post('/', async (c) => {
   const accepted = ingest(l, b.events as never[]);
   return c.json({ accepted, room: l.room });
 });
+
+/* ---------- the JPlay hub (jpvaneerde/jplayer): collection matching and import, with a listener token ---------- */
+
+const listenerOnly: MiddlewareHandler = async (c, next) => {
+  const token = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
+  if (!token || !listenerByToken(token)) throw bad('Unknown listener token.', 401);
+  return next();
+};
+
+export const spinsMatch = new Hono();
+spinsMatch.use('*', listenerOnly);
+spinsMatch.post('/', async (c) => {
+  const b = await c.req.json<{ songs?: unknown[] }>();
+  if (!Array.isArray(b.songs)) throw bad('Send {"songs": [...]}.');
+  return c.json({ results: matchForHub(b.songs as never[]) });
+});
+
+export const spinsExport = new Hono();
+spinsExport.use('*', listenerOnly);
+spinsExport.get('/', (c) =>
+  c.json(exportForHub(c.req.query('part') ?? '', c.req.query('after') ?? '', Math.min(Math.max(Number(c.req.query('limit')) || 500, 1), 1000))),
+);
 
 /* ---------- reading (anyone who may browse) ---------- */
 

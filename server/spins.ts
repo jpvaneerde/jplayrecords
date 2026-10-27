@@ -273,7 +273,7 @@ const MEDIUM_LABEL: Record<string, string> = { vinyl: 'vinyl', cd: 'CD', cassett
 
 /** A CD in the room's JPlay player: always your CD; which copy, if the collection knows it. */
 const PLAYER_CD_NOTE = 'CD in the JPlay player; not found among your CDs';
-function playerCdMatch(artist: string, title: string, album: string): { match: Match | null; note: string } {
+export function playerCdMatch(artist: string, title: string, album: string): { match: Match | null; note: string } {
   const m = matchCollection(artist, title, album, ['cd']);
   return { match: m, note: m ? `${m.note} (CD in the JPlay player)` : PLAYER_CD_NOTE };
 }
@@ -1114,4 +1114,66 @@ export function setPlayRecord(id: number, instanceId: number) {
     id,
   );
   return true;
+}
+
+/* ---------- for the JPlay hub (jpvaneerde/jplayer), with a listener token ---------- */
+
+/** A copy of yours as the hub shows it. */
+function copyInfo(it: ItemRow) {
+  return { id: it.instance_id, artist: it.artist, title: it.title, year: it.orig_year ?? it.year, medium: mediumOf(it), cover: coverFiles(it.cover).small };
+}
+
+/**
+ * Which of your records or CDs each song came from (the hub keeps the plays; this only knows the collection).
+ * songs: [{artist, title, album, formats, playerCd}] -> [{match, note, record}] in the same order.
+ */
+export function matchForHub(songs: { artist?: unknown; title?: unknown; album?: unknown; formats?: unknown; playerCd?: unknown }[]) {
+  return songs.slice(0, 200).map((s) => {
+    const artist = String(s.artist ?? '');
+    const title = String(s.title ?? '');
+    const album = String(s.album ?? '');
+    const formats = (Array.isArray(s.formats) ? s.formats : []).map((f) => String(f).toLowerCase()).filter((f) => ['vinyl', 'cd', 'cassette'].includes(f));
+    const { match, note } = s.playerCd ? playerCdMatch(artist, title, album) : (() => {
+      const m = matchCollection(artist, title, album, formats);
+      return { match: m, note: m ? m.note : whyNotOwned(artist, formats) };
+    })();
+    const ids = [...new Set([...(match?.instanceId != null ? [match.instanceId] : []), ...(match?.alternatives ?? [])])];
+    const items = new Map((ids.length ? all<ItemRow>(`SELECT * FROM items WHERE instance_id IN (${ids.join(',')})`) : []).map((i) => [i.instance_id, i]));
+    const it = match?.instanceId != null ? items.get(match.instanceId) : undefined;
+    return {
+      match: match
+        ? { ...match, alternatives: match.alternatives.map((i) => items.get(i)).filter((x): x is ItemRow => !!x).map(copyInfo) }
+        : null,
+      note,
+      record: it ? copyInfo(it) : null,
+    };
+  });
+}
+
+/** Everything the hub imports, in pages: rooms, plays (with your copies) and the lyrics store. */
+export function exportForHub(part: string, after: string, limit: number) {
+  if (part === 'rooms') {
+    return { rooms: [...roomInfo().entries()].map(([room, v]) => ({ room, priority: v.priority, formats: v.formats })) };
+  }
+  if (part === 'plays') {
+    const rows = all<PlayRow & { created_at: number }>('SELECT * FROM plays WHERE id > ? ORDER BY id LIMIT ?', Number(after) || 0, limit);
+    const ids = [...new Set(rows.flatMap((r) => [r.instance_id, ...(JSON.parse(r.alternatives) as number[])]).filter((x): x is number => x != null))];
+    const items = new Map((ids.length ? all<ItemRow>(`SELECT * FROM items WHERE instance_id IN (${ids.join(',')})`) : []).map((i) => [i.instance_id, i]));
+    return {
+      plays: rows.map((r) => {
+        const it = r.instance_id != null ? items.get(r.instance_id) : undefined;
+        return {
+          id: r.id, room: r.room, kind: r.kind, detail: r.detail, station: r.station, started_at: r.started_at, ended_at: r.ended_at,
+          title: r.title, artist: r.artist, album: r.album, cover: r.cover, instance_id: r.instance_id, release_id: r.release_id,
+          record: it ? copyInfo(it) : null, confidence: r.confidence, heard_by: JSON.parse(r.heard_by), note: r.note, via: r.via,
+          alternatives: (JSON.parse(r.alternatives) as number[]).map((i) => items.get(i)).filter((x): x is ItemRow => !!x).map(copyInfo),
+          created_at: r.created_at,
+        };
+      }),
+    };
+  }
+  if (part === 'lyrics') {
+    return { lyrics: all('SELECT * FROM lyrics WHERE key > ? ORDER BY key LIMIT ?', after || '', limit) };
+  }
+  return { error: 'part: rooms, plays or lyrics' };
 }
