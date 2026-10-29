@@ -161,7 +161,7 @@ export type SleeveExtra = (typeof SLEEVE_EXTRAS)[number];
 export const EU = [
   'Austria', 'Belgium', 'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic', 'Czechia', 'Denmark', 'Estonia', 'Finland',
   'France', 'Germany', 'Greece', 'Hungary', 'Ireland', 'Italy', 'Latvia', 'Lithuania', 'Luxembourg', 'Malta',
-  'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovenia', 'Spain', 'Sweden',
+  'Netherlands', 'Poland', 'Portugal', 'Romania', 'Slovakia', 'Slovak Republic', 'Slovenia', 'Spain', 'Sweden',
 ];
 /** Countries offered as extras (outside the EU: customs and VAT apply when shipping to Sweden). */
 export const NEAR_EU = ['United Kingdom', 'Norway', 'Switzerland', 'Iceland'];

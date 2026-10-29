@@ -198,7 +198,7 @@
     const iso: Record<string, string> = {
       Austria: 'AT', Belgium: 'BE', Bulgaria: 'BG', Croatia: 'HR', Cyprus: 'CY', 'Czech Republic': 'CZ', Czechia: 'CZ', Denmark: 'DK', Estonia: 'EE',
       Finland: 'FI', France: 'FR', Germany: 'DE', Greece: 'GR', Hungary: 'HU', Ireland: 'IE', Italy: 'IT', Latvia: 'LV', Lithuania: 'LT',
-      Luxembourg: 'LU', Malta: 'MT', Netherlands: 'NL', Poland: 'PL', Portugal: 'PT', Romania: 'RO', Slovakia: 'SK', Slovenia: 'SI',
+      Luxembourg: 'LU', Malta: 'MT', Netherlands: 'NL', Poland: 'PL', Portugal: 'PT', Romania: 'RO', Slovakia: 'SK', 'Slovak Republic': 'SK', Slovenia: 'SI',
       Spain: 'ES', Sweden: 'SE', 'United Kingdom': 'GB', Norway: 'NO', Switzerland: 'CH', Iceland: 'IS',
     };
     const c = iso[country];
@@ -503,7 +503,7 @@
             <span class="muted small-text">{s.countries.length} countries</span>
           </div>
           <div class="countries">
-            {#each [...ov.options.eu.filter((c) => c !== 'Czechia'), ...ov.options.nearEu] as c (c)}
+            {#each [...ov.options.eu.filter((c) => c !== 'Czechia' && c !== 'Slovakia'), ...ov.options.nearEu] as c (c)}
               <label class="check small-text"><input type="checkbox" checked={s.countries.includes(c)} onchange={() => toggleCountry(c)} /> {flag(c)} {c}</label>
             {/each}
           </div>

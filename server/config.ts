@@ -13,7 +13,7 @@ export const PUBLIC_ORIGIN = new URL(PUBLIC_URL).origin;
 export const DISCOGS_TOKEN = (env.DISCOGS_TOKEN || '').trim();
 /** Optional: whose collection to sync. Defaults to the owner of the token. */
 export const DISCOGS_USER = (env.DISCOGS_USER || '').trim();
-export const USER_AGENT = 'JPlayRecords/0.1 +https://github.com/jpvaneerde/jplayrecords';
+export const USER_AGENT = 'JPlayRecords/1.0.3 +https://github.com/jpvaneerde/jplayrecords';
 
 /** Nightly sync time (24h, local time in TZ). Empty = no nightly sync. */
 export const SYNC_TIME = (env.SYNC_TIME ?? '03:30').trim();
