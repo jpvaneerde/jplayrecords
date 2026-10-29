@@ -8,19 +8,48 @@ import { DISCOGS_TOKEN, DISCOGS_USER, USER_AGENT } from './config.ts';
 import { all, COVER_DIR, get, getSetting, indexItem, now, run, setSetting, tx, type ItemRow } from './db.ts';
 import { invalidateShelves } from './shelves.ts';
 
-const API = 'https://api.discogs.com';
+const API = (process.env.DISCOGS_API || 'https://api.discogs.com').replace(/\/$/, ''); // override for tests
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let lastCall = 0;
+// One request at a time for the whole server (the collection sync and the deal finder share the limit).
+let queue: Promise<unknown> = Promise.resolve();
+let callCount = 0;
 
-async function discogs<T>(path: string): Promise<T> {
+/** A Discogs HTTP error, with the status so callers can tell "not found" from other failures. */
+export class DiscogsError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** Number of Discogs requests made since the server started (the deal finder reports its share). */
+export const discogsCalls = () => callCount;
+
+export function discogs<T>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
+  const job = queue.then(() => discogsNow<T>(path, opts));
+  queue = job.catch(() => undefined);
+  return job;
+}
+
+async function discogsNow<T>(path: string, opts: { method?: string; body?: unknown }): Promise<T> {
   if (!DISCOGS_TOKEN) throw new Error('DISCOGS_TOKEN is not set.');
   for (let attempt = 0; ; attempt++) {
     const wait = lastCall + 1100 - Date.now();
     if (wait > 0) await sleep(wait);
     lastCall = Date.now();
+    callCount++;
     const res = await fetch(path.startsWith('http') ? path : API + path, {
-      headers: { Authorization: `Discogs token=${DISCOGS_TOKEN}`, 'User-Agent': USER_AGENT, Accept: 'application/json' },
+      method: opts.method ?? 'GET',
+      headers: {
+        Authorization: `Discogs token=${DISCOGS_TOKEN}`,
+        'User-Agent': USER_AGENT,
+        Accept: 'application/json',
+        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       signal: AbortSignal.timeout(30_000),
     });
     if (res.status === 429 && attempt < 5) {
@@ -29,10 +58,17 @@ async function discogs<T>(path: string): Promise<T> {
     }
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`Discogs ${res.status} on ${path.split('?')[0]}: ${body.slice(0, 200)}`);
+      throw new DiscogsError(res.status, `Discogs ${res.status} on ${path.split('?')[0]}: ${body.slice(0, 200)}`);
     }
-    return (await res.json()) as T;
+    if (res.status === 204) return undefined as T;
+    const text = await res.text();
+    return (text ? JSON.parse(text) : undefined) as T;
   }
+}
+
+/** The Discogs username of the collection (known after the first sync). */
+export function discogsUser(): string | null {
+  return DISCOGS_USER || getSetting<string | null>('discogsUser', null);
 }
 
 /* ---------- types (only what we use) ---------- */
@@ -44,6 +80,7 @@ interface DFormat {
   descriptions?: string[];
 }
 interface DArtist {
+  id?: number;
   name: string;
   anv?: string;
   join?: string;
@@ -63,7 +100,7 @@ interface DCollectionItem {
     cover_image?: string;
     thumb?: string;
     formats?: DFormat[];
-    labels?: { name: string; catno: string }[];
+    labels?: { id?: number; name: string; catno: string }[];
     artists?: DArtist[];
     genres?: string[];
     styles?: string[];
@@ -279,14 +316,15 @@ async function runSync(reason: string) {
     const changedCovers: Pick<ItemRow, 'instance_id' | 'release_id' | 'cover_url'>[] = [];
     tx(() => {
       const upsert = `INSERT INTO items (instance_id, release_id, folder_id, artist, title, year, format, size, discs, format_text, labels,
-          genres, styles, fields, rating, date_added, cover_url, discogs_rank, synced_at, master_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          genres, styles, fields, rating, date_added, cover_url, discogs_rank, synced_at, master_id, artist_ids, label_ids)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(instance_id) DO UPDATE SET release_id = excluded.release_id, folder_id = excluded.folder_id,
           artist = excluded.artist, title = excluded.title, year = excluded.year, master_id = excluded.master_id,
           format = excluded.format, size = excluded.size,
           discs = excluded.discs, format_text = excluded.format_text, labels = excluded.labels, genres = excluded.genres,
           styles = excluded.styles, fields = excluded.fields, rating = excluded.rating, date_added = excluded.date_added,
-          cover_url = excluded.cover_url, discogs_rank = excluded.discogs_rank, synced_at = excluded.synced_at`;
+          cover_url = excluded.cover_url, discogs_rank = excluded.discogs_rank, synced_at = excluded.synced_at,
+          artist_ids = excluded.artist_ids, label_ids = excluded.label_ids`;
       seen.forEach((it, rank) => {
         const b = it.basic_information;
         const fi = formatInfo(b.formats);
@@ -316,6 +354,9 @@ async function runSync(reason: string) {
           rank,
           t,
           b.master_id || null,
+          // Discogs ids, for the deal finder ("Various" = 194 is not an artist you collect).
+          JSON.stringify((b.artists ?? []).map((a) => a.id).filter((x): x is number => !!x && x !== 194)),
+          JSON.stringify([...new Set((b.labels ?? []).map((l) => l.id).filter((x): x is number => !!x))]),
         );
         const coverMissing = !old?.cover || !existsSync(join(COVER_DIR, `${old.cover}.jpg`));
         if (cover && (coverMissing || old?.cover_url !== cover)) changedCovers.push({ instance_id: it.instance_id, release_id: b.id, cover_url: cover });

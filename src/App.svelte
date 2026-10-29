@@ -6,6 +6,7 @@
   import { session } from './lib/session.svelte';
   import Screensaver from './lib/ui/Screensaver.svelte';
   import Browse from './pages/Browse.svelte';
+  import Deals from './pages/Deals.svelte';
   import Record from './pages/Record.svelte';
   import Settings from './pages/Settings.svelte';
   import Spins from './pages/Spins.svelte';
@@ -20,7 +21,7 @@
     if (session.kiosk && session.role) {
       idle.start(session.display.idleSeconds, async () => {
         // Nobody here: back to the start, fresh settings, cover wall.
-        if (router.path !== '/settings' && router.path !== '/spins') {
+        if (router.path !== '/settings' && router.path !== '/spins' && router.path !== '/deals') {
           browse.clear();
           router.go('/', true);
         }
@@ -40,6 +41,12 @@
 {:else if router.path === '/settings'}
   {#if session.isAdmin}
     <Settings />
+  {:else}
+    <Welcome />
+  {/if}
+{:else if router.path === '/deals'}
+  {#if session.isAdmin}
+    <Deals />
   {:else}
     <Welcome />
   {/if}

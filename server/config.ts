@@ -32,3 +32,9 @@ export const JPLAY_LOGIN_URL = env.JPLAY_LOGIN_URL || 'https://jplay.cloud/login
 export const READ_USERS = (env.READ_USERS || 'none').trim().toLowerCase();
 /** Local development only: everyone is the admin. Ignored on https. */
 export const DEV_ADMIN = env.DEV_ADMIN === '1' && !SECURE_COOKIES;
+
+/** Deal digest by email: an SMTP URL such as smtps://user:password@smtp.example.com:465 (Kubernetes secret). */
+export const SMTP_URL = (env.SMTP_URL || '').trim();
+/** Who gets the digest (defaults to ADMIN_EMAIL) and who it's from. */
+export const DEALS_MAIL_TO = (env.DEALS_MAIL_TO || env.ADMIN_EMAIL || '').trim();
+export const DEALS_MAIL_FROM = (env.DEALS_MAIL_FROM || 'JPlay Records <records@jplay.cloud>').trim();

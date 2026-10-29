@@ -111,6 +111,58 @@ and both units get the same answer. Each song has an `offset` (seconds) for its 
 screen to correct timing, pick another version or paste lyrics comes later. Settings → Listeners shows how many
 songs are stored. When this server can't be reached, the units use their own copy or ask LRCLIB directly.
 
+## Deals: LPs for sale that fit the collection
+
+**records.jplay.cloud/deals** (owner only, not on the kiosk) lists records for sale (LPs by default) in your region (the EU by default) that fit
+the collection, with a price verdict. Everything goes through the official Discogs API; nothing scrapes Discogs pages.
+
+**Where listings come from**
+
+1. **Sellers you name** (Deals → Settings → Sellers). Each run reads their newest listings with
+   `GET /users/{seller}/inventory`, newest first, and after the first run only what's new. Every listing says where it
+   ships from, so only your region is kept.
+2. **The browser helper**, a userscript for Tampermonkey/Violentmonkey (Deals → Settings → Browser helper). On Discogs
+   marketplace pages you open yourself, such as *Shop my wants*, it sends the listing numbers it sees to
+   `POST /api/deals/ingest` (with its own token). The server reads each one through `GET /marketplace/listings/{id}`.
+   Good sellers in your region that it sees are added to the seller list (can be turned off).
+
+**What fits**: on your wantlist (100), an album by an artist you collect that you don't own on vinyl (55 + 5 per record
+you own by them), or labels and styles you have a lot of (lower; only well-known records, to keep the request count
+down). A record you already own on vinyl is never shown.
+
+**Price verdict**: compared with Discogs' price suggestion for the listing's media condition (Discogs only gives these
+when your seller settings are filled in), else the median of what the finder has seen for that release in that
+condition, plus the lowest price on Discogs. *Great deal* and *Good price* are % below typical (30 % / 15 % by default).
+
+**Filters** (on the page and in settings): skip compilations (format plus title words such as "Greatest Hits"), live
+albums (title, or release notes saying "recorded live"), box sets, unofficial releases, reissues, picture discs,
+promos/test pressings, and albums you own on CD. **Media and sleeve are each "X or better"** (e.g. VG+ or better / VG or
+better), with optional Generic / Not Graded / No Cover sleeves. **Formats** are a checklist, any combination of LP, EP,
+Single, 12", 10", 7", CD and Cassette (LP only by default). "Already owned" means the album on the same media (vinyl, CD
+or cassette); owning it on another one is shown, or skipped if you like. Also: max price, seller rating and number of
+ratings. "Not interested" hides an album, an artist or a seller.
+
+**Runs** every 6 hours (and after each collection sync), within a request budget (1,500 per run by default, about 28
+minutes). It shares Discogs' 60-per-minute limit with the collection sync, which goes first.
+
+**Optional, off by default** (Deals → Settings):
+
+- **Digest** daily or weekly with new deals (each sent once): by email (needs `SMTP_URL`) and/or push to an
+  [ntfy](https://ntfy.sh) topic or any webhook (e.g. Home Assistant), which gets JSON.
+- **Auto-wantlist**: puts missing albums by artists you collect on your Discogs wantlist (a few per run, the most
+  collected or the original vinyl LP version), so Discogs and the helper watch for them. They get the note "Added by the
+  JPlay Records deal finder"; one button removes them all again.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `SMTP_URL` | none | For the email digest, e.g. `smtps://user:password@smtp.example.com:465` (Kubernetes secret). |
+| `DEALS_MAIL_TO` | `ADMIN_EMAIL` | Who gets the digest. |
+| `DEALS_MAIL_FROM` | `JPlay Records <records@jplay.cloud>` | Sender of the digest. |
+
+Exchange rates come from the ECB's daily reference rates (www.ecb.europa.eu), so the pod needs outbound access there.
+The first collection sync after updating stores Discogs artist and label ids, which the finder needs; until then only
+wantlist matches work.
+
 ## Run it locally
 
 ```sh

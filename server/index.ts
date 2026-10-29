@@ -13,6 +13,9 @@ import { scheduleNightly, startSync } from './discogs.ts';
 import { spins, spinsAdmin, spinsExport, spinsFromHub, spinsIngest, spinsMatch } from './routes/spins.ts';
 import { lyricsApi } from './routes/lyrics.ts';
 import { listenerByToken, startSpinsWorker } from './spins.ts';
+import { dealsAdmin, dealsIngest } from './routes/deals.ts';
+import { startDealsWorker } from './deals.ts';
+import { startDigestSchedule } from './digest.ts';
 
 const app = new Hono<Env>();
 
@@ -27,7 +30,8 @@ app.use('*', async (c, next) => {
 
 // API writes must come from this site.
 app.use('/api/*', async (c, next) => {
-  if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
+  // The deals browser helper posts from discogs.com with its own token (no cookies), so no origin check there.
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) && c.req.path !== '/api/deals/ingest') {
     const origin = c.req.header('origin');
     if (origin && origin !== PUBLIC_ORIGIN) throw new HTTPException(403, { message: 'Cross-site request blocked.' });
     if (!c.req.header('content-type')?.includes('application/json') && c.req.method !== 'DELETE') {
@@ -46,6 +50,8 @@ app.route('/api/spins/export', spinsExport);
 app.route('/api/spins/hub-plays', spinsFromHub);
 app.route('/api/spins', spins);
 app.route('/api/admin/spins', spinsAdmin);
+app.route('/api/admin/deals', dealsAdmin);
+app.route('/api/deals/ingest', dealsIngest);
 app.route('/api/admin', admin);
 app.route('/api/lyrics', lyricsApi);
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
@@ -111,6 +117,10 @@ if (existsSync(STATIC_DIR)) {
 
 serve({ fetch: app.fetch, port: PORT, hostname: '0.0.0.0' }, () => {
   startSpinsWorker();
+  if (DISCOGS_TOKEN) {
+    startDealsWorker();
+    startDigestSchedule();
+  }
   console.log(`JPlay Records listening on :${PORT} (public URL ${PUBLIC_URL}, data in ${DATA_DIR})`);
   if (DEV_ADMIN) console.log('DEV_ADMIN=1: everyone is the admin (local development only).');
   else if (!JPLAY_API || !ADMIN_EMAIL) console.log('JPLAY_API or ADMIN_EMAIL is not set: nobody can open Settings.');

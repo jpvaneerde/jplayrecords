@@ -76,6 +76,8 @@ db.exec(`
 // Small additive migrations for databases created by earlier versions.
 const itemCols = (db.prepare('PRAGMA table_info(items)').all() as { name: string }[]).map((c) => c.name);
 if (!itemCols.includes('master_id')) db.exec('ALTER TABLE items ADD COLUMN master_id INTEGER');
+if (!itemCols.includes('artist_ids')) db.exec("ALTER TABLE items ADD COLUMN artist_ids TEXT NOT NULL DEFAULT '[]'");
+if (!itemCols.includes('label_ids')) db.exec("ALTER TABLE items ADD COLUMN label_ids TEXT NOT NULL DEFAULT '[]'");
 if (!itemCols.includes('orig_year')) {
   // Original release year (from the master); year = this pressing.
   db.exec('ALTER TABLE items ADD COLUMN orig_year INTEGER');
@@ -152,6 +154,8 @@ export interface ItemRow {
   cover: string | null;
   discogs_rank: number;
   synced_at: number;
+  artist_ids: string; // JSON array of Discogs artist ids
+  label_ids: string; // JSON array of Discogs label ids
 }
 
 /** Rebuild the full-text row for one item (call after any change to it or its release details). */
